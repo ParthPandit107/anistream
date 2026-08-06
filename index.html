@@ -118,6 +118,25 @@
       { id: '4', getUrl: (id, ep, aud) => `https://tryembed.us.cc/embed/anime/${id}/${ep}/${aud}` }
     ];
 
+    async function fetchWithRetry(url, maxRetries = 5, delayMs = 3000) {
+      for (let i = 0; i < maxRetries; i++) {
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 12000);
+          const res = await fetch(url, { signal: controller.signal });
+          clearTimeout(timeoutId);
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.success) return data;
+          }
+        } catch (e) {
+          console.warn(`Attempt ${i + 1} failed for ${url}. Retrying in ${delayMs}ms...`);
+        }
+        await new Promise(r => setTimeout(r, delayMs));
+      }
+      throw new Error('Server connection timeout');
+    }
+
     function determineCategory(animeId, epNum) {
       const id = parseInt(animeId, 10);
       if (id === 269) {
@@ -255,7 +274,7 @@
 
     async function triggerRandomAnime() {
       try {
-        const res = await fetch(API_BASE + '/api/anime/trending').then(r=>r.json());
+        const res = await fetchWithRetry(API_BASE + '/api/anime/trending');
         if (res.data && res.data.length > 0) {
           const item = res.data[Math.floor(Math.random() * res.data.length)];
           navigateTo('/anime/' + item.id);
@@ -449,12 +468,17 @@
 
     async function renderHome() {
       const app = document.getElementById('app');
-      app.innerHTML = '<div class="text-center py-20 font-mono text-xs text-neutral-400">Loading catalog...</div>';
+      app.innerHTML = `
+        <div class="text-center py-24 space-y-4">
+          <div class="inline-block h-8 w-8 animate-spin rounded-full border-4 border-white border-t-transparent"></div>
+          <div class="font-mono text-xs text-neutral-400 uppercase tracking-widest">Connecting to Live Backend (Waking up server...)...</div>
+        </div>
+      `;
       
       try {
         const [trending, popular] = await Promise.all([
-          fetch(API_BASE + '/api/anime/trending').then(r=>r.json()),
-          fetch(API_BASE + '/api/anime/popular').then(r=>r.json())
+          fetchWithRetry(API_BASE + '/api/anime/trending'),
+          fetchWithRetry(API_BASE + '/api/anime/popular')
         ]);
 
         const heroSlides = (trending.data || []).slice(0, 10);
@@ -482,7 +506,12 @@
         renderContinueWatchingDOM();
         startHeroSlideshowAutoPlay();
       } catch (e) {
-        app.innerHTML = '<div class="text-center py-20 font-mono text-xs text-neutral-400">Failed to load catalog.</div>';
+        app.innerHTML = `
+          <div class="text-center py-20 space-y-4 font-mono text-xs">
+            <div class="text-neutral-400 uppercase tracking-wider">Server is spinning up...</div>
+            <button onclick="renderHome()" class="border border-white bg-white text-black font-bold px-6 py-2 uppercase">Retry Connection</button>
+          </div>
+        `;
       }
     }
 
@@ -617,7 +646,7 @@
         if (state.format !== 'All') params.set('format', state.format);
         params.set('page', state.page);
 
-        const res = await fetch(API_BASE + '/api/anime/search?' + params.toString()).then(r=>r.json());
+        const res = await fetchWithRetry(API_BASE + '/api/anime/search?' + params.toString());
         if (res.forbidden) {
           if (warningBox && warningText) {
             warningText.innerText = res.error;
@@ -843,9 +872,14 @@
 
     async function renderDetail(id) {
       const app = document.getElementById('app');
-      app.innerHTML = '<div class="text-center py-20 font-mono text-xs text-neutral-400">Loading details...</div>';
+      app.innerHTML = `
+        <div class="text-center py-24 space-y-4">
+          <div class="inline-block h-8 w-8 animate-spin rounded-full border-4 border-white border-t-transparent"></div>
+          <div class="font-mono text-xs text-neutral-400 uppercase tracking-widest">Loading details...</div>
+        </div>
+      `;
       try {
-        const res = await fetch(API_BASE + '/api/anime/' + id).then(r=>r.json());
+        const res = await fetchWithRetry(API_BASE + '/api/anime/' + id);
         const anime = res.data;
         if (!anime) {
           app.innerHTML = '<div class="text-center py-20 font-mono text-xs text-neutral-400">Anime not found or prohibited.</div>';
@@ -943,9 +977,14 @@
 
     async function renderWatch(id, ep) {
       const app = document.getElementById('app');
-      app.innerHTML = '<div class="text-center py-20 font-mono text-xs text-neutral-400">Loading stream...</div>';
+      app.innerHTML = `
+        <div class="text-center py-24 space-y-4">
+          <div class="inline-block h-8 w-8 animate-spin rounded-full border-4 border-white border-t-transparent"></div>
+          <div class="font-mono text-xs text-neutral-400 uppercase tracking-widest">Loading stream...</div>
+        </div>
+      `;
       try {
-        const res = await fetch(API_BASE + '/api/anime/' + id).then(r=>r.json());
+        const res = await fetchWithRetry(API_BASE + '/api/anime/' + id);
         const anime = res.data;
         if (!anime) {
           app.innerHTML = '<div class="text-center py-20 font-mono text-xs text-neutral-400">Anime not found or prohibited.</div>';
@@ -1094,6 +1133,11 @@
         renderWatch(state.animeId, state.episode);
       }
     }
+
+    // Keep-alive heartbeat ping every 4 minutes to prevent Render free instance from sleeping
+    setInterval(() => {
+      fetch(API_BASE + '/api/anime/trending').catch(() => {});
+    }, 240000);
   </script>
 </body>
 </html>
