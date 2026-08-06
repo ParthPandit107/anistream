@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: anistream-backend
+    env: node
+    region: singapore
+    buildCommand: echo "No build required"
+    startCommand: node server.js
+    envVars:
+      - key: PORT
+        value: 10000
