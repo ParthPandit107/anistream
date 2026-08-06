@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <title>ANISTREAM</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -43,12 +44,20 @@
 <body class="bg-black text-white antialiased min-h-screen flex flex-col overflow-x-hidden w-full max-w-full">
   <!-- Header -->
   <header class="sticky top-0 z-50 w-full border-b border-border bg-black/95 backdrop-blur-md overflow-hidden">
-    <div class="max-w-7xl mx-auto flex h-16 sm:h-20 items-center justify-between px-4 sm:px-8">
-      <a href="#" onclick="navigateTo('/'); return false;" class="flex items-center gap-2 sm:gap-3">
-        <div class="flex h-8 w-8 sm:h-10 sm:w-10 items-center justify-center bg-white text-black font-bold text-xl sm:text-2xl">A</div>
-        <span class="font-bold text-lg sm:text-2xl tracking-wider text-white uppercase">ANISTREAM</span>
-      </a>
+    <div class="max-w-7xl mx-auto flex h-16 sm:h-20 items-center justify-between px-3 sm:px-8 gap-2">
+      
+      <!-- Brand & Mobile Menu Button -->
+      <div class="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+        <button onclick="toggleMobileNav()" class="lg:hidden border border-border bg-surface p-2 text-white hover:border-white focus:outline-none" title="Toggle Navigation">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+        </button>
+        <a href="#" onclick="navigateTo('/'); return false;" class="flex items-center gap-2">
+          <div class="flex h-8 w-8 sm:h-10 sm:w-10 items-center justify-center bg-white text-black font-bold text-xl sm:text-2xl">A</div>
+          <span class="font-bold text-base sm:text-2xl tracking-wider text-white uppercase truncate">ANISTREAM</span>
+        </a>
+      </div>
 
+      <!-- Desktop Navigation -->
       <nav class="hidden lg:flex items-center gap-4 text-xs font-mono">
         <button onclick="navigateTo('/')" class="hover:text-neutral-400 uppercase py-2">Discover</button>
         <button onclick="navigateTo('/search')" class="hover:text-neutral-400 uppercase py-2">Catalog</button>
@@ -56,17 +65,28 @@
         <button onclick="navigateTo('/my-list')" class="hover:text-neutral-400 uppercase py-2">My List</button>
       </nav>
 
-      <div class="flex items-center gap-2 sm:gap-4">
-        <div class="w-36 sm:w-56 xl:w-72">
-          <input type="text" id="quickSearchInput" onkeydown="if(event.key==='Enter') doSearch(this.value)" placeholder="Search..." class="w-full border border-border bg-surface px-3 py-1.5 sm:px-4 sm:py-2 text-xs text-white placeholder-neutral-500 focus:border-white focus:outline-none font-mono" />
+      <!-- Search & Random Button -->
+      <div class="flex items-center gap-1.5 sm:gap-4 flex-1 max-w-[200px] sm:max-w-xs xl:max-w-md justify-end min-w-0">
+        <div class="flex-1 min-w-0">
+          <input type="text" id="quickSearchInput" onkeydown="if(event.key==='Enter') doSearch(this.value)" placeholder="Search..." class="w-full border border-border bg-surface px-2 py-1.5 sm:px-4 sm:py-2 text-xs text-white placeholder-neutral-500 focus:border-white focus:outline-none font-mono truncate" />
         </div>
-        <button onclick="triggerRandomAnime()" title="Random Anime" class="border border-border bg-surface p-1.5 sm:p-2 text-neutral-300 hover:border-white hover:text-white font-mono text-xs uppercase">Random</button>
+        <button onclick="triggerRandomAnime()" title="Random Anime" class="flex-shrink-0 border border-border bg-surface px-2 py-1.5 sm:px-3 sm:py-2 text-neutral-300 hover:border-white hover:text-white font-mono text-[11px] sm:text-xs uppercase flex items-center gap-1">
+          <span>🎲</span> <span class="hidden sm:inline">Random</span>
+        </button>
       </div>
+    </div>
+
+    <!-- Mobile Slide-Down Navigation Drawer -->
+    <div id="mobileNavDrawer" class="hidden lg:hidden border-t border-border bg-surface px-4 py-3 space-y-2 font-mono text-xs">
+      <button onclick="toggleMobileNav(); navigateTo('/');" class="block w-full text-left py-2 border-b border-neutral-900 hover:text-white text-neutral-300 uppercase">🏠 Discover</button>
+      <button onclick="toggleMobileNav(); navigateTo('/search');" class="block w-full text-left py-2 border-b border-neutral-900 hover:text-white text-neutral-300 uppercase">📚 Catalog & Filters</button>
+      <button onclick="toggleMobileNav(); navigateTo('/search?sort=trending');" class="block w-full text-left py-2 border-b border-neutral-900 hover:text-white text-neutral-300 uppercase">🔥 Trending Now</button>
+      <button onclick="toggleMobileNav(); navigateTo('/my-list');" class="block w-full text-left py-2 hover:text-white text-neutral-300 uppercase">⭐ My List</button>
     </div>
   </header>
 
   <!-- Main View -->
-  <main id="app" class="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 py-6 sm:py-10 space-y-8 overflow-x-hidden"></main>
+  <main id="app" class="flex-1 max-w-7xl mx-auto w-full px-3 sm:px-6 py-6 sm:py-10 space-y-8 overflow-x-hidden"></main>
 
   <!-- Footer -->
   <footer class="border-t border-border bg-black py-8 text-neutral-500 text-xs font-mono mt-auto overflow-hidden">
@@ -100,7 +120,9 @@
       visibleCount: 24,
       currentSlide: 0,
       heroSlides: [],
-      slideInterval: null
+      slideInterval: null,
+      commentPollInterval: null,
+      activeReplyId: null
     };
 
     const FORBIDDEN_KEYWORDS = ['loli', 'lolicon', 'lolis', 'shota', 'shotacon', 'underage', 'child', 'kodomo', 'lolita', 'pico', 'boku no pico', 'shoujo ramune', 'ramune', 'chico', 'cozo'];
@@ -109,6 +131,11 @@
       if (!q) return false;
       const lower = q.toLowerCase();
       return FORBIDDEN_KEYWORDS.some(kw => lower.includes(kw));
+    }
+
+    function toggleMobileNav() {
+      const drawer = document.getElementById('mobileNavDrawer');
+      if (drawer) drawer.classList.toggle('hidden');
     }
 
     const EMBED_PROVIDERS = [
@@ -205,24 +232,46 @@
       localStorage.setItem('anistream_my_list', JSON.stringify(list));
     }
 
-    function getComments(animeId) {
+    async function fetchCommentsFromAPI(animeId, ep = 0) {
       try {
-        const store = JSON.parse(localStorage.getItem('anistream_comments') || '{}');
-        return store[animeId] || [];
-      } catch(e) { return []; }
+        const query = ep !== null && ep !== undefined ? '?episode=' + ep : '';
+        const res = await fetch(API_BASE + '/api/anime/' + animeId + '/comments' + query);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.success) return data.data || [];
+        }
+      } catch (e) {
+        console.error("fetchComments error:", e);
+      }
+      return [];
     }
-    function addComment(animeId, username, text, episode) {
-      const store = JSON.parse(localStorage.getItem('anistream_comments') || '{}');
-      const list = store[animeId] || [];
-      list.unshift({
-        id: Math.random().toString(36).substring(2, 9),
-        username: username.trim() || 'Anonymous',
-        text: text.trim(),
-        episode,
-        timestamp: Date.now()
-      });
-      store[animeId] = list;
-      localStorage.setItem('anistream_comments', JSON.stringify(store));
+
+    async function submitCommentToAPI(animeId, username, text, episode = 0, parentId = null, isSpoiler = false) {
+      try {
+        const res = await fetch(API_BASE + '/api/anime/' + animeId + '/comments', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, text, episode, parentId, isSpoiler })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          return data && data.success;
+        }
+      } catch (e) {
+        console.error("submitComment error:", e);
+      }
+      return false;
+    }
+
+    async function voteCommentOnAPI(commentId, voteType, animeId, ep = 0) {
+      try {
+        await fetch(API_BASE + '/api/comments/' + commentId + '/vote', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: voteType })
+        });
+        refreshCommentsSection(animeId, ep);
+      } catch (e) {}
     }
 
     function scrollToTop() {
@@ -241,6 +290,10 @@
       if (state.slideInterval) {
         clearInterval(state.slideInterval);
         state.slideInterval = null;
+      }
+      if (state.commentPollInterval) {
+        clearInterval(state.commentPollInterval);
+        state.commentPollInterval = null;
       }
       const hash = window.location.hash.slice(1) || '/';
       if (hash === '/') renderHome();
@@ -301,10 +354,9 @@
 
     function renderCardHTML(anime) {
       const releasedCount = anime.releasedEpisodes || anime.episodes || 12;
-      const cleanSynopsis = (anime.synopsis || "No synopsis available.").replace(/'/g, "&#39;");
       
       return `
-        <div class="group relative flex flex-col border border-border bg-surface hover:border-neutral-400 transition-all p-2.5 sm:p-3">
+        <div class="group relative flex flex-col border border-border bg-surface hover:border-neutral-400 transition-all p-2 sm:p-3">
           <div class="absolute inset-0 -z-10 overflow-hidden opacity-0 blur-2xl transition-opacity duration-500 group-hover:opacity-70">
             <img src="${anime.coverImage}" class="w-full h-full object-cover scale-150" />
           </div>
@@ -315,9 +367,9 @@
               <span class="bg-black/90 px-1 py-0.5 border border-neutral-700 text-white">${anime.rating}</span>
             </div>
           </a>
-          <div class="p-2 sm:p-3 font-sans text-xs flex-1 flex flex-col justify-between space-y-2">
-            <a href="#/anime/${anime.id}" class="font-semibold text-white truncate block hover:underline" title="${anime.title}">${anime.title}</a>
-            <div class="flex justify-between text-[10px] sm:text-[11px] text-neutral-400 font-mono pt-2 border-t border-neutral-900">
+          <div class="p-1.5 sm:p-3 font-sans text-xs flex-1 flex flex-col justify-between space-y-1.5">
+            <a href="#/anime/${anime.id}" class="font-semibold text-white truncate block hover:underline text-[11px] sm:text-xs" title="${anime.title}">${anime.title}</a>
+            <div class="flex justify-between text-[10px] sm:text-[11px] text-neutral-400 font-mono pt-1.5 border-t border-neutral-900">
               <span>${anime.year || ''}</span>
               <span>${releasedCount} EPS</span>
             </div>
@@ -338,18 +390,18 @@
 
       section.innerHTML = `
         <div class="flex justify-between items-center mb-4">
-          <h2 class="font-bold text-lg sm:text-xl uppercase tracking-wider text-white border-l-2 border-white pl-3 sm:pl-4">Continue Watching (${continueList.length})</h2>
+          <h2 class="font-bold text-base sm:text-xl uppercase tracking-wider text-white border-l-2 border-white pl-3 sm:pl-4">Continue Watching (${continueList.length})</h2>
         </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-6">
           ${continueList.map(item => `
-            <div class="border border-border bg-surface hover:border-neutral-400 p-3 flex gap-3 overflow-hidden">
-              <a href="#/watch/${item.animeId}/${item.episode}" class="w-20 sm:w-24 aspect-[2/3] flex-shrink-0 bg-neutral-900 border border-neutral-800 overflow-hidden block">
+            <div class="border border-border bg-surface hover:border-neutral-400 p-2.5 sm:p-3 flex gap-3 overflow-hidden">
+              <a href="#/watch/${item.animeId}/${item.episode}" class="w-16 sm:w-24 aspect-[2/3] flex-shrink-0 bg-neutral-900 border border-neutral-800 overflow-hidden block">
                 <img src="${item.coverImage}" class="w-full h-full object-cover" />
               </a>
               <div class="flex-1 min-w-0 flex flex-col justify-between py-0.5 text-xs space-y-1">
                 <div class="min-w-0">
                   <div class="font-mono text-[10px] text-white font-bold">EP ${item.episode} / ${item.totalEpisodes || '?'}</div>
-                  <a href="#/watch/${item.animeId}/${item.episode}" class="font-semibold text-white truncate block hover:underline mt-1" title="${item.animeTitle}">${item.animeTitle}</a>
+                  <a href="#/watch/${item.animeId}/${item.episode}" class="font-semibold text-white truncate block hover:underline mt-0.5 text-xs" title="${item.animeTitle}">${item.animeTitle}</a>
                 </div>
                 <div class="pt-2 border-t border-neutral-900 flex justify-between items-center font-mono text-[10px] min-w-0 gap-2">
                   <a href="#/watch/${item.animeId}/${item.episode}" class="text-white font-bold uppercase hover:underline truncate">Resume Ep ${item.episode}</a>
@@ -368,41 +420,39 @@
       state.currentSlide = 0;
 
       return `
-        <div class="relative w-full overflow-hidden border border-neutral-800 mb-8 sm:mb-10 bg-neutral-950 min-h-[420px] sm:min-h-[480px] group max-w-full" id="heroSlideshowContainer">
+        <div class="relative w-full overflow-hidden border border-neutral-800 mb-6 sm:mb-10 bg-neutral-950 min-h-[380px] sm:min-h-[480px] group max-w-full" id="heroSlideshowContainer">
           <!-- Slide Panels -->
           ${slides.map((hero, idx) => `
-            <div id="heroSlide-${idx}" class="hero-slide-panel absolute inset-0 transition-opacity duration-700 ease-in-out p-6 sm:p-10 md:p-14 flex items-center max-w-full overflow-hidden ${idx === 0 ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}">
+            <div id="heroSlide-${idx}" class="hero-slide-panel absolute inset-0 transition-opacity duration-700 ease-in-out p-4 sm:p-10 md:p-14 flex items-center max-w-full overflow-hidden ${idx === 0 ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}">
               <!-- Cinematic Backdrop Image -->
               <div class="absolute inset-0 overflow-hidden">
                 <img src="${hero.bannerImage || hero.coverImage}" class="w-full h-full object-cover object-center scale-105 filter brightness-90 transition-transform duration-1000" />
-                <div class="absolute inset-0 bg-gradient-to-r from-black via-black/75 to-black/30"></div>
+                <div class="absolute inset-0 bg-gradient-to-r from-black via-black/80 to-black/40"></div>
                 <div class="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black/40"></div>
               </div>
 
               <!-- Content Grid with Visible Poster Art -->
-              <div class="relative z-10 max-w-7xl w-full mx-auto flex flex-col md:flex-row items-center gap-6 md:gap-10">
-                <!-- High Quality Visible Anime Cover Poster -->
+              <div class="relative z-10 max-w-7xl w-full mx-auto flex flex-col md:flex-row items-center gap-4 sm:gap-8">
                 <a href="#/anime/${hero.id}" class="hidden sm:block w-36 sm:w-44 md:w-56 aspect-[2/3] flex-shrink-0 border-2 border-white/20 shadow-2xl overflow-hidden bg-neutral-900 group-hover:border-white transition-all duration-300 transform group-hover:scale-[1.02] relative">
                   <img src="${hero.coverImage}" alt="${hero.title}" class="w-full h-full object-cover" />
                   <div class="absolute top-2 left-2 bg-black/90 px-2 py-0.5 border border-white/30 text-[10px] font-mono font-bold text-white uppercase">${hero.format}</div>
                 </a>
 
                 <!-- Anime Information & Action Buttons -->
-                <div class="flex-1 space-y-3 sm:space-y-4 text-left">
+                <div class="flex-1 space-y-2.5 sm:space-y-4 text-left">
                   <div class="flex items-center gap-2 sm:gap-3 text-[10px] sm:text-xs font-mono flex-wrap">
-                    <span class="bg-red-600 text-white font-bold px-2.5 py-0.5 uppercase tracking-wider shadow">#${idx + 1} TOP TRENDING</span>
-                    <span class="bg-white text-black font-bold px-2.5 py-0.5 uppercase">${hero.format}</span>
-                    <span class="border border-white/30 bg-black/80 backdrop-blur-md px-2.5 py-0.5 text-white font-bold">${hero.rating} &#9733;</span>
-                    <span class="border border-neutral-700 bg-black/80 px-2.5 py-0.5 text-neutral-300">${hero.year || ''}</span>
+                    <span class="bg-red-600 text-white font-bold px-2 py-0.5 uppercase tracking-wider shadow">#${idx + 1} TOP TRENDING</span>
+                    <span class="bg-white text-black font-bold px-2 py-0.5 uppercase">${hero.format}</span>
+                    <span class="border border-white/30 bg-black/80 backdrop-blur-md px-2 py-0.5 text-white font-bold">${hero.rating} &#9733;</span>
                   </div>
 
-                  <h1 class="font-bold text-2xl sm:text-4xl md:text-5xl text-white uppercase tracking-tight line-clamp-2 leading-tight drop-shadow-md">${hero.title}</h1>
+                  <h1 class="font-bold text-xl sm:text-4xl md:text-5xl text-white uppercase tracking-tight line-clamp-2 leading-tight drop-shadow-md">${hero.title}</h1>
                   
                   <p class="text-xs sm:text-sm text-neutral-200 line-clamp-2 sm:line-clamp-3 font-sans leading-relaxed drop-shadow max-w-3xl">${hero.synopsis}</p>
                   
                   <div class="pt-2 sm:pt-3 flex items-center gap-3 sm:gap-4">
-                    <a href="#/watch/${hero.id}/1" class="inline-flex items-center gap-2 border border-white bg-white px-6 py-2.5 sm:px-8 sm:py-3 text-xs font-bold text-black uppercase tracking-wider hover:bg-neutral-200 shadow-lg">Stream Ep 1</a>
-                    <a href="#/anime/${hero.id}" class="inline-block border border-white/30 bg-black/80 backdrop-blur-md px-5 py-2.5 sm:px-6 sm:py-3 text-xs font-mono text-white hover:border-white hover:bg-black uppercase">Details</a>
+                    <a href="#/watch/${hero.id}/1" class="inline-flex items-center gap-2 border border-white bg-white px-5 py-2 sm:px-8 sm:py-3 text-xs font-bold text-black uppercase tracking-wider hover:bg-neutral-200 shadow-lg">Stream Ep 1</a>
+                    <a href="#/anime/${hero.id}" class="inline-block border border-white/30 bg-black/80 backdrop-blur-md px-4 py-2 sm:px-6 sm:py-3 text-xs font-mono text-white hover:border-white hover:bg-black uppercase">Details</a>
                   </div>
                 </div>
               </div>
@@ -414,7 +464,7 @@
           <button onclick="changeHeroSlide(1)" class="hidden sm:block absolute right-4 top-1/2 -translate-y-1/2 z-20 border border-white/30 bg-black/80 backdrop-blur-md text-white hover:bg-white hover:text-black p-3 font-mono text-sm transition-colors opacity-0 group-hover:opacity-100 shadow-xl">&rarr;</button>
 
           <!-- Slide Indicators / Dots -->
-          <div class="absolute bottom-4 sm:bottom-6 right-4 sm:right-8 z-20 flex items-center gap-1.5 sm:gap-2 font-mono text-xs">
+          <div class="absolute bottom-3 sm:bottom-6 right-4 sm:right-8 z-20 flex items-center gap-1.5 sm:gap-2 font-mono text-xs">
             ${slides.map((_, idx) => `
               <button onclick="goToHeroSlide(${idx})" id="heroDot-${idx}" class="h-2 transition-all duration-300 ${idx === 0 ? 'w-6 sm:w-8 bg-white' : 'w-2 bg-neutral-600 hover:bg-neutral-400'}"></button>
             `).join('')}
@@ -485,19 +535,19 @@
         
         let html = renderHeroSlideshow(heroSlides);
 
-        html += '<section id="continueWatchingSection" class="space-y-4 mb-10"></section>';
+        html += '<section id="continueWatchingSection" class="space-y-4 mb-8 sm:mb-10"></section>';
 
         html += `
-          <section class="space-y-6 mb-12">
-            <h2 class="font-bold text-lg sm:text-xl uppercase tracking-wider text-white border-l-2 border-white pl-3 sm:pl-4">Trending Now</h2>
-            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-6">
+          <section class="space-y-4 sm:space-y-6 mb-10 sm:mb-12">
+            <h2 class="font-bold text-base sm:text-xl uppercase tracking-wider text-white border-l-2 border-white pl-3 sm:pl-4">Trending Now</h2>
+            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2.5 sm:gap-6">
               ${(trending.data || []).slice(0, 18).map(renderCardHTML).join('')}
             </div>
           </section>
 
-          <section class="space-y-6">
-            <h2 class="font-bold text-lg sm:text-xl uppercase tracking-wider text-white border-l-2 border-white pl-3 sm:pl-4">Popular All Time</h2>
-            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-6">
+          <section class="space-y-4 sm:space-y-6">
+            <h2 class="font-bold text-base sm:text-xl uppercase tracking-wider text-white border-l-2 border-white pl-3 sm:pl-4">Popular All Time</h2>
+            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2.5 sm:gap-6">
               ${(popular.data || []).slice(0, 18).map(renderCardHTML).join('')}
             </div>
           </section>
@@ -520,7 +570,7 @@
       app.innerHTML = `
         <div class="space-y-8">
           <div class="border-b border-border pb-4 flex justify-between items-center">
-            <h1 class="text-xl sm:text-2xl font-bold uppercase tracking-wider">Catalog & Filters</h1>
+            <h1 class="text-lg sm:text-2xl font-bold uppercase tracking-wider">Catalog & Filters</h1>
           </div>
           <div class="space-y-4 border border-border bg-surface p-4 sm:p-6 font-mono text-xs">
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -604,7 +654,7 @@
           </div>
           
           <div id="searchResultsSection" class="space-y-8">
-            <div id="searchResults" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-6 pt-4"></div>
+            <div id="searchResults" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2.5 sm:gap-6 pt-4"></div>
             <div id="showMoreContainer" class="flex justify-center pt-4 pb-8 border-t border-neutral-900 hidden">
               <button id="showMoreBtn" onclick="loadMoreCatalog()" class="border border-white bg-white text-black font-bold px-10 py-3 text-xs font-mono uppercase hover:bg-neutral-200">+ Show More Anime</button>
             </div>
@@ -725,7 +775,7 @@
       let html = `
         <div class="space-y-8">
           <div class="border-b border-border pb-4 flex justify-between items-center">
-            <h1 class="text-xl sm:text-2xl font-bold uppercase tracking-wider">My List & Ratings</h1>
+            <h1 class="text-lg sm:text-2xl font-bold uppercase tracking-wider">My List & Ratings</h1>
             <div class="text-xs font-mono text-neutral-400">${list.length} Items Saved</div>
           </div>
       `;
@@ -870,6 +920,93 @@
       }
     }
 
+    async function refreshCommentsSection(animeId, ep = 0) {
+      const section = document.getElementById('commentsContainer');
+      if (!section) return;
+      const list = await fetchCommentsFromAPI(animeId, ep);
+      section.innerHTML = renderCommentsListHTML(list, animeId, ep);
+    }
+
+    function toggleReplyForm(commentId) {
+      const form = document.getElementById('replyForm-' + commentId);
+      if (form) form.classList.toggle('hidden');
+    }
+
+    function toggleSpoilerView(commentId) {
+      const text = document.getElementById('spoilerText-' + commentId);
+      const btn = document.getElementById('spoilerBtn-' + commentId);
+      if (text && btn) {
+        text.classList.remove('blur-sm', 'select-none');
+        btn.classList.add('hidden');
+      }
+    }
+
+    function renderSingleCommentCard(c, allComments, animeId, ep) {
+      const replies = allComments.filter(r => r.parentId === c.id);
+
+      return `
+        <div class="border border-border bg-surface p-3.5 sm:p-4 space-y-2.5 text-xs font-sans">
+          <div class="flex justify-between items-center font-mono text-neutral-400 text-[11px]">
+            <span class="text-white font-bold flex items-center gap-2">
+              <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
+              ${c.username || 'Anonymous'}
+            </span>
+            <span class="text-[10px] text-neutral-500">${new Date(c.timestamp).toLocaleString()}</span>
+          </div>
+
+          <!-- Spoiler Protection -->
+          ${c.isSpoiler ? `
+            <div class="relative bg-black/60 p-3 border border-red-950/80 my-1">
+              <button id="spoilerBtn-${c.id}" onclick="toggleSpoilerView('${c.id}')" class="w-full text-center py-2 font-mono text-xs font-bold text-red-400 uppercase tracking-wider hover:underline">
+                ⚠️ SPOILER WARNING &mdash; CLICK TO REVEAL
+              </button>
+              <p id="spoilerText-${c.id}" class="text-neutral-300 blur-sm select-none transition-all leading-relaxed">${c.text}</p>
+            </div>
+          ` : `
+            <p class="text-neutral-300 leading-relaxed">${c.text}</p>
+          `}
+
+          <!-- Interaction Bar (Likes, Dislikes, Reply) -->
+          <div class="flex items-center gap-4 pt-2 border-t border-neutral-900 font-mono text-[11px]">
+            <button onclick="voteCommentOnAPI('${c.id}', 'like', ${animeId}, ${ep})" class="text-neutral-400 hover:text-white flex items-center gap-1">
+              <span>👍</span> <span>${c.likes || 0}</span>
+            </button>
+            <button onclick="voteCommentOnAPI('${c.id}', 'dislike', ${animeId}, ${ep})" class="text-neutral-400 hover:text-white flex items-center gap-1">
+              <span>👎</span> <span>${c.dislikes || 0}</span>
+            </button>
+            <button onclick="toggleReplyForm('${c.id}')" class="text-neutral-400 hover:text-white uppercase font-bold text-[10px]">
+              💬 Reply
+            </button>
+          </div>
+
+          <!-- Inline Reply Box -->
+          <div id="replyForm-${c.id}" class="hidden pt-3 space-y-2 border-t border-neutral-900">
+            <input type="text" id="replyUser-${c.id}" placeholder="Your Name" class="w-full border border-border bg-black p-2 text-xs text-white font-mono focus:border-white focus:outline-none" />
+            <textarea id="replyText-${c.id}" rows="2" placeholder="Write a reply..." class="w-full border border-border bg-black p-2 text-xs text-white font-sans focus:border-white focus:outline-none"></textarea>
+            <div class="flex justify-end gap-2">
+              <button onclick="toggleReplyForm('${c.id}')" class="border border-neutral-800 bg-black text-neutral-400 px-3 py-1 text-[10px] font-mono uppercase">Cancel</button>
+              <button onclick="handlePostReply(${animeId}, ${ep}, '${c.id}')" class="border border-white bg-white text-black font-bold px-4 py-1 text-[10px] font-mono uppercase">Post Reply</button>
+            </div>
+          </div>
+
+          <!-- Render Threaded Nested Replies -->
+          ${replies.length > 0 ? `
+            <div class="pl-3 sm:pl-5 border-l-2 border-neutral-800 space-y-2.5 mt-3 pt-2">
+              ${replies.map(r => renderSingleCommentCard(r, allComments, animeId, ep)).join('')}
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }
+
+    function renderCommentsListHTML(list, animeId, ep = 0) {
+      if (!list || list.length === 0) {
+        return `<div class="border border-border bg-surface p-6 text-center text-xs font-mono text-neutral-500 uppercase">No comments yet ${ep ? 'for Episode ' + ep : ''}. Be the first to start the discussion!</div>`;
+      }
+      const topLevel = list.filter(c => !c.parentId);
+      return topLevel.map(c => renderSingleCommentCard(c, list, animeId, ep)).join('');
+    }
+
     async function renderDetail(id) {
       const app = document.getElementById('app');
       app.innerHTML = `
@@ -879,7 +1016,11 @@
         </div>
       `;
       try {
-        const res = await fetchWithRetry(API_BASE + '/api/anime/' + id);
+        const [res, initialComments] = await Promise.all([
+          fetchWithRetry(API_BASE + '/api/anime/' + id),
+          fetchCommentsFromAPI(id, 0)
+        ]);
+
         const anime = res.data;
         if (!anime) {
           app.innerHTML = '<div class="text-center py-20 font-mono text-xs text-neutral-400">Anime not found or prohibited.</div>';
@@ -891,19 +1032,19 @@
 
         let html = `
           <div class="space-y-10">
-            <div class="relative border-b border-border bg-neutral-950 p-6 sm:p-8 md:p-12 flex flex-col md:flex-row gap-6 sm:gap-8">
-              <div class="w-44 sm:w-52 aspect-[2/3] border-2 border-border overflow-hidden bg-neutral-900 flex-shrink-0">
+            <div class="relative border-b border-border bg-neutral-950 p-4 sm:p-8 md:p-12 flex flex-col md:flex-row gap-6 sm:gap-8">
+              <div class="w-40 sm:w-52 aspect-[2/3] border-2 border-border overflow-hidden bg-neutral-900 flex-shrink-0 mx-auto md:mx-0">
                 <img src="${anime.coverImage}" class="w-full h-full object-cover" />
               </div>
-              <div class="space-y-4">
+              <div class="space-y-4 flex-1">
                 <div class="flex gap-3 text-xs font-mono flex-wrap">
                   <span class="bg-white text-black font-bold px-2.5 py-0.5 uppercase">${anime.format}</span>
                   <span class="border border-neutral-700 bg-surface px-2.5 py-0.5 text-white">${anime.rating}</span>
                   <span class="border border-neutral-800 bg-surface px-2.5 py-0.5 text-neutral-400">${releasedCount} EPS RELEASED</span>
                 </div>
-                <h1 class="text-2xl sm:text-3xl md:text-5xl font-bold uppercase text-white">${anime.title}</h1>
+                <h1 class="text-xl sm:text-3xl md:text-5xl font-bold uppercase text-white">${anime.title}</h1>
                 <p class="text-xs text-neutral-300 font-sans max-w-3xl leading-relaxed">${anime.synopsis}</p>
-                <div class="pt-3 flex gap-4">
+                <div class="pt-3 flex gap-4 flex-wrap">
                   <a href="#/watch/${anime.id}/1" class="inline-block border border-white bg-white px-8 py-3 text-xs font-bold text-black uppercase">Stream Ep 1</a>
                   <button id="myListActionBtn" onclick="toggleMyListButton(${JSON.stringify({id: anime.id, title: anime.title.replace(/'/g, "\\'"), coverImage: anime.coverImage, format: anime.format})})" class="${saved ? 'border border-neutral-700 bg-black text-neutral-300' : 'border border-border bg-surface text-white'} px-6 py-3 text-xs font-bold uppercase hover:border-white">
                     ${saved ? 'Remove from My List' : 'Save to My List'}
@@ -965,11 +1106,37 @@
               </div>
             ` : ''}
 
-            <!-- Comments Section -->
-            ${renderCommentsHTML(anime.id)}
+            <!-- Global Live Discussion Section -->
+            <div class="space-y-6 border-t border-border pt-8">
+              <div class="flex justify-between items-center">
+                <h3 class="font-bold text-sm uppercase tracking-wider text-white border-l-2 border-white pl-3">Series Discussion</h3>
+                <span class="text-[10px] font-mono text-emerald-400 flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span> Live Sync</span>
+              </div>
+              
+              <div class="border border-border bg-surface p-4 sm:p-5 space-y-3">
+                <input type="text" id="commentUser" placeholder="Your Name / Handle" class="w-full border border-border bg-black p-2.5 text-xs text-white font-mono focus:border-white focus:outline-none" />
+                <textarea id="commentText" rows="3" placeholder="Join the discussion... Share your thoughts on this series!" class="w-full border border-border bg-black p-3 text-xs text-white font-sans focus:border-white focus:outline-none"></textarea>
+                <div class="flex justify-between items-center flex-wrap gap-2">
+                  <label class="flex items-center gap-2 font-mono text-xs text-neutral-400 cursor-pointer">
+                    <input type="checkbox" id="commentSpoiler" class="accent-white" />
+                    <span>Contains Spoilers</span>
+                  </label>
+                  <button onclick="handlePostComment(${anime.id}, 0)" class="border border-white bg-white text-black font-bold px-6 py-2 text-xs font-mono uppercase hover:bg-neutral-200">Post Comment</button>
+                </div>
+              </div>
+
+              <div id="commentsContainer" class="space-y-3">
+                ${renderCommentsListHTML(initialComments, anime.id, 0)}
+              </div>
+            </div>
           </div>
         `;
         app.innerHTML = html;
+
+        state.commentPollInterval = setInterval(() => {
+          refreshCommentsSection(id, 0);
+        }, 10000);
+
       } catch (e) {
         app.innerHTML = '<div class="text-center py-20 font-mono text-xs text-neutral-400">Error loading details</div>';
       }
@@ -984,7 +1151,11 @@
         </div>
       `;
       try {
-        const res = await fetchWithRetry(API_BASE + '/api/anime/' + id);
+        const [res, initialComments] = await Promise.all([
+          fetchWithRetry(API_BASE + '/api/anime/' + id),
+          fetchCommentsFromAPI(id, ep)
+        ]);
+
         const anime = res.data;
         if (!anime) {
           app.innerHTML = '<div class="text-center py-20 font-mono text-xs text-neutral-400">Anime not found or prohibited.</div>';
@@ -1069,51 +1240,65 @@
               ${renderEpisodesGridHTML(anime.id, releasedCount, ep)}
             </div>
 
-            ${renderCommentsHTML(anime.id, ep)}
+            <!-- Global Episode-Scoped Discussion Section -->
+            <div class="space-y-6 border-t border-border pt-8">
+              <div class="flex justify-between items-center">
+                <h3 class="font-bold text-sm uppercase tracking-wider text-white border-l-2 border-white pl-3">Episode ${ep} Discussion</h3>
+                <span class="text-[10px] font-mono text-emerald-400 flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span> Live Sync</span>
+              </div>
+              
+              <div class="border border-border bg-surface p-4 sm:p-5 space-y-3">
+                <input type="text" id="commentUser" placeholder="Your Name / Handle" class="w-full border border-border bg-black p-2.5 text-xs text-white font-mono focus:border-white focus:outline-none" />
+                <textarea id="commentText" rows="3" placeholder="React to Episode ${ep}... (No un-tagged spoilers!)" class="w-full border border-border bg-black p-3 text-xs text-white font-sans focus:border-white focus:outline-none"></textarea>
+                <div class="flex justify-between items-center flex-wrap gap-2">
+                  <label class="flex items-center gap-2 font-mono text-xs text-neutral-400 cursor-pointer">
+                    <input type="checkbox" id="commentSpoiler" class="accent-white" />
+                    <span>Contains Spoilers</span>
+                  </label>
+                  <button onclick="handlePostComment(${anime.id}, ${ep})" class="border border-white bg-white text-black font-bold px-6 py-2 text-xs font-mono uppercase hover:bg-neutral-200">Post Comment</button>
+                </div>
+              </div>
+
+              <div id="commentsContainer" class="space-y-3">
+                ${renderCommentsListHTML(initialComments, anime.id, ep)}
+              </div>
+            </div>
           </div>
         `;
         app.innerHTML = html;
+
+        state.commentPollInterval = setInterval(() => {
+          refreshCommentsSection(id, ep);
+        }, 10000);
+
       } catch (e) {
         app.innerHTML = '<div class="text-center py-20 font-mono text-xs text-neutral-400">Error loading stream</div>';
       }
     }
 
-    function renderCommentsHTML(animeId, episode) {
-      const list = getComments(animeId);
-      return `
-        <div class="space-y-6 border-t border-border pt-8">
-          <h3 class="font-bold text-sm uppercase tracking-wider text-white border-l-2 border-white pl-3">Comments (${list.length})</h3>
-          
-          <div class="border border-border bg-surface p-5 space-y-3">
-            <input type="text" id="commentUser" placeholder="Username (optional)" class="w-full border border-border bg-black p-2.5 text-xs text-white font-mono focus:outline-none" />
-            <textarea id="commentText" rows="3" placeholder="Leave a comment after watching..." class="w-full border border-border bg-black p-3 text-xs text-white font-sans focus:outline-none"></textarea>
-            <div class="flex justify-end">
-              <button onclick="submitComment(${animeId}, ${episode || 0})" class="border border-white bg-white text-black font-bold px-6 py-2 text-xs font-mono uppercase">Post Comment</button>
-            </div>
-          </div>
-
-          <div class="space-y-3">
-            ${list.length > 0 ? list.map(c => `
-              <div class="border border-border bg-surface p-4 space-y-2 text-xs font-sans">
-                <div class="flex justify-between font-mono text-neutral-400">
-                  <span class="text-white font-bold">${c.username} ${c.episode ? '(EP ' + c.episode + ')' : ''}</span>
-                  <span class="text-[10px]">${new Date(c.timestamp).toLocaleDateString()}</span>
-                </div>
-                <p class="text-neutral-300 pl-4 border-l border-neutral-800">${c.text}</p>
-              </div>
-            `).join('') : '<div class="border border-border bg-surface p-6 text-center text-xs font-mono text-neutral-500">No comments yet.</div>'}
-          </div>
-        </div>
-      `;
-    }
-
-    function submitComment(animeId, ep) {
+    async function handlePostComment(animeId, ep) {
       const user = document.getElementById('commentUser').value;
       const text = document.getElementById('commentText').value;
+      const isSpoiler = document.getElementById('commentSpoiler')?.checked || false;
       if (!text.trim()) return;
-      addComment(animeId, user, text, ep || null);
-      if (state.route.startsWith('/watch/')) renderWatch(state.animeId, state.episode);
-      else renderDetail(state.animeId);
+
+      const success = await submitCommentToAPI(animeId, user, text, ep || 0, null, isSpoiler);
+      if (success) {
+        document.getElementById('commentText').value = '';
+        if (document.getElementById('commentSpoiler')) document.getElementById('commentSpoiler').checked = false;
+        refreshCommentsSection(animeId, ep);
+      }
+    }
+
+    async function handlePostReply(animeId, ep, parentId) {
+      const user = document.getElementById('replyUser-' + parentId).value;
+      const text = document.getElementById('replyText-' + parentId).value;
+      if (!text.trim()) return;
+
+      const success = await submitCommentToAPI(animeId, user, text, ep || 0, parentId, false);
+      if (success) {
+        refreshCommentsSection(animeId, ep);
+      }
     }
 
     function switchServer(srvId) {
@@ -1134,10 +1319,9 @@
       }
     }
 
-    // Keep-alive heartbeat ping every 4 minutes to prevent Render free instance from sleeping
     setInterval(() => {
-      fetch(API_BASE + '/api/anime/trending').catch(() => {});
-    }, 240000);
+      fetch(API_BASE + '/api/keepalive').catch(() => {});
+    }, 840000);
   </script>
 </body>
 </html>

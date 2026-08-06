@@ -5,33 +5,143 @@ const zlib = require("zlib");
 
 const PORT = process.env.PORT || 3000;
 const ANILIST_ENDPOINT = "https://graphql.anilist.co";
+const MONGODB_URI = process.env.MONGODB_URI || "";
+const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || "https://anistream-backend-ljjx.onrender.com";
 
-const FORBIDDEN_KEYWORDS = [
-  "loli",
-  "lolicon",
-  "lolis",
-  "shota",
-  "shotacon",
-  "underage",
-  "child",
-  "kodomo",
-  "lolita",
-  "pico",
-  "boku no pico",
-  "shoujo ramune",
-  "ramune",
-  "chico",
-  "cozo",
-];
+let mongoClient = null;
+let commentsCollection = null;
+const memoryCommentsStore = new Map();
 
-const BLACKLISTED_TITLES = [
-  "boku no pico",
-  "shoujo ramune",
-  "pico to chico",
-  "pico x chico x cozo",
-  "kodomo no jikan",
-  "aki-sora",
-];
+if (MONGODB_URI) {
+  try {
+    const { MongoClient, ObjectId } = require("mongodb");
+    mongoClient = new MongoClient(MONGODB_URI);
+    mongoClient.connect().then(() => {
+      console.log("Connected to MongoDB Atlas successfully!");
+      const db = mongoClient.db(process.env.MONGODB_DB_NAME || "anistream");
+      commentsCollection = db.collection("comments");
+    }).catch(err => {
+      console.error("MongoDB Connection Error:", err.message);
+    });
+  } catch (e) {
+    console.warn("mongodb package not loaded. Using persistent fallback store.");
+  }
+}
+
+// Keep-Alive Self Ping every 14 minutes
+setInterval(() => {
+  try {
+    const pingUrl = `${RENDER_EXTERNAL_URL}/api/keepalive`;
+    const lib = pingUrl.startsWith("https") ? https : http;
+    lib.get(pingUrl, (res) => {
+      console.log(`[KEEP-ALIVE] Ping status: ${res.statusCode}`);
+    }).on("error", (err) => {
+      console.warn(`[KEEP-ALIVE] Ping error: ${err.message}`);
+    });
+  } catch (e) {}
+}, 840000);
+
+async function getCommentsForAnime(animeId, episode = null) {
+  const key = String(animeId);
+  const epFilter = episode !== null && episode !== undefined ? parseInt(episode, 10) : null;
+
+  if (commentsCollection) {
+    try {
+      const query = { animeId: key };
+      if (epFilter !== null && !isNaN(epFilter)) {
+        query.episode = epFilter;
+      }
+      const list = await commentsCollection
+        .find(query)
+        .sort({ timestamp: -1 })
+        .limit(200)
+        .toArray();
+      return list.map(item => ({
+        id: item._id.toString(),
+        animeId: item.animeId,
+        username: item.username || "Anonymous",
+        text: item.text,
+        episode: item.episode,
+        parentId: item.parentId || null,
+        likes: item.likes || 0,
+        dislikes: item.dislikes || 0,
+        isSpoiler: !!item.isSpoiler,
+        timestamp: item.timestamp
+      }));
+    } catch (e) {
+      console.error("MongoDB getComments error:", e);
+    }
+  }
+
+  const all = memoryCommentsStore.get(key) || [];
+  if (epFilter !== null && !isNaN(epFilter)) {
+    return all.filter(c => c.episode === epFilter);
+  }
+  return all;
+}
+
+async function saveCommentForAnime(animeId, commentData) {
+  const key = String(animeId);
+  const comment = {
+    animeId: key,
+    username: (commentData.username || "Anonymous").trim(),
+    text: (commentData.text || "").trim(),
+    episode: commentData.episode !== undefined && commentData.episode !== null ? parseInt(commentData.episode, 10) : 0,
+    parentId: commentData.parentId || null,
+    likes: 0,
+    dislikes: 0,
+    isSpoiler: !!commentData.isSpoiler,
+    timestamp: Date.now()
+  };
+
+  if (!comment.text) return null;
+
+  if (commentsCollection) {
+    try {
+      const res = await commentsCollection.insertOne(comment);
+      return {
+        id: res.insertedId.toString(),
+        ...comment
+      };
+    } catch (e) {
+      console.error("MongoDB saveComment error:", e);
+    }
+  }
+
+  const list = memoryCommentsStore.get(key) || [];
+  comment.id = Math.random().toString(36).substring(2, 9);
+  list.unshift(comment);
+  memoryCommentsStore.set(key, list.slice(0, 200));
+  return comment;
+}
+
+async function voteComment(commentId, voteType) {
+  if (commentsCollection) {
+    try {
+      const { ObjectId } = require("mongodb");
+      const field = voteType === "like" ? { likes: 1 } : { dislikes: 1 };
+      let objId;
+      try { objId = new ObjectId(commentId); } catch(e) { objId = commentId; }
+      await commentsCollection.updateOne({ _id: objId }, { $inc: field });
+      return true;
+    } catch (e) {
+      console.error("MongoDB voteComment error:", e);
+    }
+  }
+
+  for (const [key, list] of memoryCommentsStore.entries()) {
+    const target = list.find(c => c.id === commentId);
+    if (target) {
+      if (voteType === "like") target.likes = (target.likes || 0) + 1;
+      else target.dislikes = (target.dislikes || 0) + 1;
+      return true;
+    }
+  }
+  return false;
+}
+
+const FORBIDDEN_KEYWORDS = ["loli", "lolicon", "lolis", "shota", "shotacon", "underage", "child", "kodomo", "lolita", "pico", "boku no pico", "shoujo ramune", "ramune", "chico", "cozo"];
+const BLACKLISTED_TITLES = ["boku no pico", "shoujo ramune", "pico to chico", "pico x chico x cozo", "kodomo no jikan", "aki-sora"];
 
 function isForbiddenQuery(query) {
   if (!query) return false;
@@ -43,7 +153,6 @@ function filterSafeMedia(mediaList, allowAdult = false) {
   return (mediaList || []).filter((item) => {
     if (!item) return false;
     if (!allowAdult && item.isAdult) return false;
-
     const titleEng = (item.title?.english || "").toLowerCase();
     const titleRom = (item.title?.romaji || "").toLowerCase();
     const titleUser = (item.title?.userPreferred || "").toLowerCase();
@@ -209,23 +318,23 @@ function deduplicateList(list) {
 
 async function getTrending() {
   const cached = getCache("trending");
-  if (cached) return cached;
+  if (cached && cached.length > 0) return cached;
   const q = `query { Page(page: 1, perPage: 18) { media(type: ANIME, sort: TRENDING_DESC, isAdult: false) { ${MEDIA_QUERY} } } }`;
   const data = await fetchGraphQL(q);
   const safeList = filterSafeMedia(data.Page.media || [], false);
   const list = deduplicateList(safeList.map(normalizeAniListMedia));
-  setCache("trending", list);
+  if (list && list.length > 0) setCache("trending", list);
   return list;
 }
 
 async function getPopular() {
   const cached = getCache("popular");
-  if (cached) return cached;
+  if (cached && cached.length > 0) return cached;
   const q = `query { Page(page: 1, perPage: 18) { media(type: ANIME, sort: POPULARITY_DESC, isAdult: false) { ${MEDIA_QUERY} } } }`;
   const data = await fetchGraphQL(q);
   const safeList = filterSafeMedia(data.Page.media || [], false);
   const list = deduplicateList(safeList.map(normalizeAniListMedia));
-  setCache("popular", list);
+  if (list && list.length > 0) setCache("popular", list);
   return list;
 }
 
@@ -294,7 +403,7 @@ async function searchAnime(search, genre, year, status, format, page = 1) {
     const data = await fetchGraphQL(q, vars);
     const safeList = filterSafeMedia(data.Page.media || [], false);
     const list = deduplicateList(safeList.map(normalizeAniListMedia));
-    setCache(cacheKey, list, 900);
+    if (list && list.length > 0) setCache(cacheKey, list, 900);
     return list;
   } catch (e) {
     console.error("Search query error:", e);
@@ -353,7 +462,7 @@ function sendCompressedResponse(req, res, statusCode, headers, bodyData) {
   const buffer = Buffer.isBuffer(bodyData) ? bodyData : Buffer.from(bodyData);
 
   headers['Access-Control-Allow-Origin'] = '*';
-  headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS';
+  headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS';
   headers['Access-Control-Allow-Headers'] = 'Content-Type, Accept, Accept-Encoding';
   headers['Vary'] = 'Accept-Encoding';
 
@@ -388,1106 +497,18 @@ function sendCompressedResponse(req, res, statusCode, headers, bodyData) {
   }
 }
 
-function renderAppHTML() {
-  return `<!DOCTYPE html>
-<html lang="en" class="dark">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>ANISTREAM</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          colors: {
-            background: '#000000',
-            surface: '#0a0a0a',
-            'surface-card': '#121212',
-            border: '#262626'
-          }
-        }
-      }
-    }
-  </script>
-  <style>
-    *, *::before, *::after {
-      box-sizing: border-box;
-    }
-    html, body {
-      background-color: #000000;
-      color: #ffffff;
-      font-family: system-ui, -apple-system, sans-serif;
-      overflow-x: hidden !important;
-      width: 100%;
-      max-width: 100vw;
-      margin: 0;
-      padding: 0;
-    }
-    ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: #000000; }
-    ::-webkit-scrollbar-thumb { background: #262626; }
-    .scrollbar-none::-webkit-scrollbar { display: none; }
-  </style>
-</head>
-<body class="bg-black text-white antialiased min-h-screen flex flex-col overflow-x-hidden w-full max-w-full">
-  <!-- Header -->
-  <header class="sticky top-0 z-50 w-full border-b border-border bg-black/95 backdrop-blur-md overflow-hidden">
-    <div class="max-w-7xl mx-auto flex h-16 sm:h-20 items-center justify-between px-4 sm:px-8">
-      <a href="#" onclick="navigateTo('/'); return false;" class="flex items-center gap-2 sm:gap-3">
-        <div class="flex h-8 w-8 sm:h-10 sm:w-10 items-center justify-center bg-white text-black font-bold text-xl sm:text-2xl">A</div>
-        <span class="font-bold text-lg sm:text-2xl tracking-wider text-white uppercase">ANISTREAM</span>
-      </a>
-
-      <nav class="hidden lg:flex items-center gap-4 text-xs font-mono">
-        <button onclick="navigateTo('/')" class="hover:text-neutral-400 uppercase py-2">Discover</button>
-        <button onclick="navigateTo('/search')" class="hover:text-neutral-400 uppercase py-2">Catalog</button>
-        <button onclick="navigateTo('/search?sort=trending')" class="hover:text-neutral-400 uppercase py-2">Trending</button>
-        <button onclick="navigateTo('/my-list')" class="hover:text-neutral-400 uppercase py-2">My List</button>
-      </nav>
-
-      <div class="flex items-center gap-2 sm:gap-4">
-        <div class="w-36 sm:w-56 xl:w-72">
-          <input type="text" id="quickSearchInput" onkeydown="if(event.key==='Enter') doSearch(this.value)" placeholder="Search..." class="w-full border border-border bg-surface px-3 py-1.5 sm:px-4 sm:py-2 text-xs text-white placeholder-neutral-500 focus:border-white focus:outline-none font-mono" />
-        </div>
-        <button onclick="triggerRandomAnime()" title="Random Anime" class="border border-border bg-surface p-1.5 sm:p-2 text-neutral-300 hover:border-white hover:text-white font-mono text-xs uppercase">Random</button>
-      </div>
-    </div>
-  </header>
-
-  <!-- Main View -->
-  <main id="app" class="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 py-6 sm:py-10 space-y-8 overflow-x-hidden"></main>
-
-  <!-- Footer -->
-  <footer class="border-t border-border bg-black py-8 text-neutral-500 text-xs font-mono mt-auto overflow-hidden">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 flex items-center justify-between">
-      <div class="flex items-center gap-3">
-        <div class="flex h-6 w-6 items-center justify-center bg-white text-black font-bold text-xs">A</div>
-        <span class="font-bold text-white tracking-widest uppercase">ANISTREAM</span>
-      </div>
-      <div>ANISTREAM CATALOG</div>
-    </div>
-  </footer>
-
-  <script>
-    const API_BASE = window.ANISTREAM_API_URL || '';
-
-    let state = {
-      route: '/',
-      animeId: null,
-      episode: 1,
-      server: '1',
-      audio: 'sub',
-      query: '',
-      genre: 'All',
-      year: 'All',
-      status: 'All',
-      format: 'All',
-      sortBy: 'popularity',
-      page: 1,
-      searchResults: [],
-      epRangeChunk: 0,
-      visibleCount: 24,
-      currentSlide: 0,
-      heroSlides: [],
-      slideInterval: null
-    };
-
-    const FORBIDDEN_KEYWORDS = ['loli', 'lolicon', 'lolis', 'shota', 'shotacon', 'underage', 'child', 'kodomo', 'lolita', 'pico', 'boku no pico', 'shoujo ramune', 'ramune', 'chico', 'cozo'];
-
-    function isForbidden(q) {
-      if (!q) return false;
-      const lower = q.toLowerCase();
-      return FORBIDDEN_KEYWORDS.some(kw => lower.includes(kw));
-    }
-
-    const EMBED_PROVIDERS = [
-      { id: '1', getUrl: (id, ep, aud) => \`https://megaplay.buzz/stream/ani/\${id}/\${ep}/\${aud}\` },
-      { id: '2', getUrl: (id, ep, aud) => \`https://vidnest.fun/animepahe/\${id}/\${ep}/\${aud}\` },
-      { id: '3', getUrl: (id, ep, aud) => \`https://vidnest.fun/anime/\${id}/\${ep}/\${aud}\` },
-      { id: '4', getUrl: (id, ep, aud) => \`https://tryembed.us.cc/embed/anime/\${id}/\${ep}/\${aud}\` }
-    ];
-
-    function determineCategory(animeId, epNum) {
-      const id = parseInt(animeId, 10);
-      if (id === 269) {
-        const bleachFiller = [33, 50, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 147, 148, 149, 204, 205, 213, 214, 287, 298, 299, 303, 304, 305, 355];
-        if (bleachFiller.includes(epNum) || (epNum >= 64 && epNum <= 108) || (epNum >= 168 && epNum <= 189) || (epNum >= 228 && epNum <= 266) || (epNum >= 311 && epNum <= 341)) return "filler";
-        const bleachMixed = [8, 27, 32, 46, 109, 111, 116, 119, 120, 124, 141, 143, 146, 156, 160, 161, 190, 193, 206, 207, 209, 222, 223, 267, 268, 274, 276, 284, 285, 288, 290, 291, 295, 296, 310, 342, 343, 345, 347, 351, 357];
-        if (bleachMixed.includes(epNum)) return "mixed";
-        return "manga_canon";
-      }
-
-      if (id === 21) {
-        if ([54,55,56,57,58,59,60,61,98,99,101,102,131,132,133,134,135,136,137,138,139,140,141,142,143,196,197,198,199,200,201,202,203,204,205,206,220,221,222,223,224,225,226,326,327,328,329,330,331,332,333,334,335,336,382,383,384,406,407,426,427,428,429,457,458,492,542,575,576,577,578,590,626,627,628,747,748,749,750,780,781,782,895,896,1029,1030].includes(epNum)) return "filler";
-        if ([1, 45, 46, 47, 68, 69, 100, 291, 292, 303, 405, 459, 493, 494, 574].includes(epNum)) return "mixed";
-        return "manga_canon";
-      }
-
-      if (id === 20) {
-        if ((epNum >= 136 && epNum <= 219) || [26, 97, 101, 102, 103, 104, 105, 106].includes(epNum)) return "filler";
-        if ([7, 9, 14, 15, 16, 18, 20, 21, 23, 24, 53, 54, 57, 73, 93, 99, 100].includes(epNum)) return "mixed";
-        return "manga_canon";
-      }
-
-      if (id === 1735) {
-        if ([57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,144,145,146,147,148,149,150,151,170,171,176,177,178,179,180,181,182,183,184,185,186,187,188,189,190,191,192,193,194,195,196,223,224,225,226,227,228,229,230,231,232,233,234,235,236,237,238,239,240,241,242,257,258,259,260,271,279,280,281,284,285,286,287,288,289,290,291,292,293,294,295,303,304,305,306,307,308,309,310,311,312,313,314,315,316,317,318,319,320,347,348,349,350,351,352,353,354,355,356,357,358,359,360,361,376,377,388,389,390,394,395,396,397,398,399,400,401,402,403,404,405,406,407,408,409,410,411,412,413,416,417,422,423,427,428,429,430,431,432,433,434,435,436,437,438,440,441,442,443,444,445,446,447,448,449,450,464,465,466,467,468,480,481,482,483].includes(epNum)) return "filler";
-        if ([9, 10, 11, 12, 19, 24, 55, 72, 89, 115, 127, 128, 213, 378, 385, 386, 391, 392, 393, 414, 415, 418, 421, 426, 469].includes(epNum)) return "mixed";
-        return "manga_canon";
-      }
-
-      return "manga_canon";
-    }
-
-    function getWatchHistory() {
-      try { return JSON.parse(localStorage.getItem('anistream_watch_history') || '[]'); } catch(e) { return []; }
-    }
-    function isEpisodeWatched(animeId, ep) {
-      return getWatchHistory().some(h => h.animeId === parseInt(animeId, 10) && h.episode === ep);
-    }
-
-    function getContinueWatching() {
-      try { return JSON.parse(localStorage.getItem('anistream_continue_watching') || '[]'); } catch(e) { return []; }
-    }
-    function saveContinueWatching(item) {
-      const list = getContinueWatching().filter(i => i.animeId !== item.animeId);
-      list.unshift(item);
-      localStorage.setItem('anistream_continue_watching', JSON.stringify(list.slice(0, 10)));
-    }
-    function removeFromContinueWatching(id) {
-      const list = getContinueWatching().filter(i => i.animeId !== id);
-      localStorage.setItem('anistream_continue_watching', JSON.stringify(list));
-      renderContinueWatchingDOM();
-    }
-
-    function getMyList() {
-      try { return JSON.parse(localStorage.getItem('anistream_my_list') || '[]'); } catch(e) { return []; }
-    }
-    function isAnimeInMyList(id) {
-      return getMyList().some(i => i.animeId === parseInt(id, 10));
-    }
-    function saveToMyList(item) {
-      const list = getMyList().filter(i => i.animeId !== item.animeId);
-      list.unshift(item);
-      localStorage.setItem('anistream_my_list', JSON.stringify(list));
-    }
-    function removeFromMyList(id) {
-      const list = getMyList().filter(i => i.animeId !== parseInt(id, 10));
-      localStorage.setItem('anistream_my_list', JSON.stringify(list));
-    }
-
-    function getComments(animeId) {
+function parseRequestBody(req) {
+  return new Promise((resolve) => {
+    let body = "";
+    req.on("data", chunk => body += chunk);
+    req.on("end", () => {
       try {
-        const store = JSON.parse(localStorage.getItem('anistream_comments') || '{}');
-        return store[animeId] || [];
-      } catch(e) { return []; }
-    }
-    function addComment(animeId, username, text, episode) {
-      const store = JSON.parse(localStorage.getItem('anistream_comments') || '{}');
-      const list = store[animeId] || [];
-      list.unshift({
-        id: Math.random().toString(36).substring(2, 9),
-        username: username.trim() || 'Anonymous',
-        text: text.trim(),
-        episode,
-        timestamp: Date.now()
-      });
-      store[animeId] = list;
-      localStorage.setItem('anistream_comments', JSON.stringify(store));
-    }
-
-    function scrollToTop() {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
-
-    function navigateTo(path) {
-      window.location.hash = path;
-      scrollToTop();
-    }
-
-    window.addEventListener('hashchange', handleRoute);
-    window.addEventListener('load', handleRoute);
-
-    function handleRoute() {
-      if (state.slideInterval) {
-        clearInterval(state.slideInterval);
-        state.slideInterval = null;
-      }
-      const hash = window.location.hash.slice(1) || '/';
-      if (hash === '/') renderHome();
-      else if (hash.startsWith('/search')) {
-        const params = new URLSearchParams(hash.split('?')[1] || '');
-        state.query = params.get('q') || '';
-        state.page = 1;
-        state.visibleCount = 24;
-        state.searchResults = [];
-        renderSearch();
-      } else if (hash === '/my-list') {
-        renderMyList();
-      } else if (hash.startsWith('/anime/')) {
-        state.animeId = hash.split('/')[2];
-        state.epRangeChunk = 0;
-        renderDetail(state.animeId);
-      } else if (hash.startsWith('/watch/')) {
-        const parts = hash.split('/');
-        state.animeId = parts[2];
-        state.episode = parseInt(parts[3] || 1, 10);
-        state.epRangeChunk = Math.floor((state.episode - 1) / 100);
-        renderWatch(state.animeId, state.episode);
-      }
-      scrollToTop();
-    }
-
-    function doSearch(val) {
-      if (!val) return;
-      navigateTo('/search?q=' + encodeURIComponent(val));
-    }
-
-    async function triggerRandomAnime() {
-      try {
-        const res = await fetch(API_BASE + '/api/anime/trending').then(r=>r.json());
-        if (res.data && res.data.length > 0) {
-          const item = res.data[Math.floor(Math.random() * res.data.length)];
-          navigateTo('/anime/' + item.id);
-        }
-      } catch(e){}
-    }
-
-    function sortAnimeList(list, criterion) {
-      const copy = [...list];
-      if (criterion === 'rating_desc') {
-        return copy.sort((a, b) => (parseFloat(b.rating) || 0) - (parseFloat(a.rating) || 0));
-      }
-      if (criterion === 'rating_asc') {
-        return copy.sort((a, b) => (parseFloat(a.rating) || 0) - (parseFloat(b.rating) || 0));
-      }
-      if (criterion === 'episodes_desc') {
-        return copy.sort((a, b) => (b.releasedEpisodes || b.episodes || 0) - (a.releasedEpisodes || a.episodes || 0));
-      }
-      if (criterion === 'episodes_asc') {
-        return copy.sort((a, b) => (a.releasedEpisodes || a.episodes || 0) - (b.releasedEpisodes || b.episodes || 0));
-      }
-      return copy;
-    }
-
-    function renderCardHTML(anime) {
-      const releasedCount = anime.releasedEpisodes || anime.episodes || 12;
-      const cleanSynopsis = (anime.synopsis || "No synopsis available.").replace(/'/g, "&#39;");
-      
-      return \`
-        <div class="group relative flex flex-col border border-border bg-surface hover:border-neutral-400 transition-all p-2.5 sm:p-3">
-          <div class="absolute inset-0 -z-10 overflow-hidden opacity-0 blur-2xl transition-opacity duration-500 group-hover:opacity-70">
-            <img src="\${anime.coverImage}" class="w-full h-full object-cover scale-150" />
-          </div>
-          <a href="#/anime/\${anime.id}" class="relative aspect-[2/3] w-full overflow-hidden bg-neutral-900">
-            <img src="\${anime.coverImage}" alt="\${anime.title}" class="object-cover w-full h-full transition-transform duration-500 group-hover:scale-105" />
-            <div class="absolute top-1.5 left-1.5 right-1.5 flex justify-between text-[9px] sm:text-[10px] font-mono font-bold">
-              <span class="bg-black/90 px-1 py-0.5 border border-neutral-700 text-white uppercase">\${anime.format || 'TV'}</span>
-              <span class="bg-black/90 px-1 py-0.5 border border-neutral-700 text-white">\${anime.rating}</span>
-            </div>
-          </a>
-          <div class="p-2 sm:p-3 font-sans text-xs flex-1 flex flex-col justify-between space-y-2">
-            <a href="#/anime/\${anime.id}" class="font-semibold text-white truncate block hover:underline" title="\${anime.title}">\${anime.title}</a>
-            <div class="flex justify-between text-[10px] sm:text-[11px] text-neutral-400 font-mono pt-2 border-t border-neutral-900">
-              <span>\${anime.year || ''}</span>
-              <span>\${releasedCount} EPS</span>
-            </div>
-          </div>
-        </div>
-      \`;
-    }
-
-    function renderContinueWatchingDOM() {
-      const section = document.getElementById('continueWatchingSection');
-      if (!section) return;
-
-      const continueList = getContinueWatching();
-      if (continueList.length === 0) {
-        section.innerHTML = '';
-        return;
-      }
-
-      section.innerHTML = \`
-        <div class="flex justify-between items-center mb-4">
-          <h2 class="font-bold text-lg sm:text-xl uppercase tracking-wider text-white border-l-2 border-white pl-3 sm:pl-4">Continue Watching (\${continueList.length})</h2>
-        </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
-          \${continueList.map(item => \`
-            <div class="border border-border bg-surface hover:border-neutral-400 p-3 flex gap-3 overflow-hidden">
-              <a href="#/watch/\${item.animeId}/\${item.episode}" class="w-20 sm:w-24 aspect-[2/3] flex-shrink-0 bg-neutral-900 border border-neutral-800 overflow-hidden block">
-                <img src="\${item.coverImage}" class="w-full h-full object-cover" />
-              </a>
-              <div class="flex-1 min-w-0 flex flex-col justify-between py-0.5 text-xs space-y-1">
-                <div class="min-w-0">
-                  <div class="font-mono text-[10px] text-white font-bold">EP \${item.episode} / \${item.totalEpisodes || '?'}</div>
-                  <a href="#/watch/\${item.animeId}/\${item.episode}" class="font-semibold text-white truncate block hover:underline mt-1" title="\${item.animeTitle}">\${item.animeTitle}</a>
-                </div>
-                <div class="pt-2 border-t border-neutral-900 flex justify-between items-center font-mono text-[10px] min-w-0 gap-2">
-                  <a href="#/watch/\${item.animeId}/\${item.episode}" class="text-white font-bold uppercase hover:underline truncate">Resume Ep \${item.episode}</a>
-                  <button onclick="event.preventDefault(); event.stopPropagation(); removeFromContinueWatching(\${item.animeId});" class="flex-shrink-0 border border-neutral-800 bg-black text-neutral-400 hover:text-white px-2 py-0.5 uppercase">Remove</button>
-                </div>
-              </div>
-            </div>
-          \`).join('')}
-        </div>
-      \`;
-    }
-
-    function renderHeroSlideshow(slides) {
-      if (!slides || slides.length === 0) return '';
-      state.heroSlides = slides;
-      state.currentSlide = 0;
-
-      return \`
-        <div class="relative w-full overflow-hidden border border-neutral-800 mb-8 sm:mb-10 bg-neutral-950 min-h-[420px] sm:min-h-[480px] group max-w-full" id="heroSlideshowContainer">
-          <!-- Slide Panels -->
-          \${slides.map((hero, idx) => \`
-            <div id="heroSlide-\${idx}" class="hero-slide-panel absolute inset-0 transition-opacity duration-700 ease-in-out p-6 sm:p-10 md:p-14 flex items-center max-w-full overflow-hidden \${idx === 0 ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'}">
-              <!-- Cinematic Backdrop Image -->
-              <div class="absolute inset-0 overflow-hidden">
-                <img src="\${hero.bannerImage || hero.coverImage}" class="w-full h-full object-cover object-center scale-105 filter brightness-90 transition-transform duration-1000" />
-                <div class="absolute inset-0 bg-gradient-to-r from-black via-black/75 to-black/30"></div>
-                <div class="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black/40"></div>
-              </div>
-
-              <!-- Content Grid with Visible Poster Art -->
-              <div class="relative z-10 max-w-7xl w-full mx-auto flex flex-col md:flex-row items-center gap-6 md:gap-10">
-                <!-- High Quality Visible Anime Cover Poster -->
-                <a href="#/anime/\${hero.id}" class="hidden sm:block w-36 sm:w-44 md:w-56 aspect-[2/3] flex-shrink-0 border-2 border-white/20 shadow-2xl overflow-hidden bg-neutral-900 group-hover:border-white transition-all duration-300 transform group-hover:scale-[1.02] relative">
-                  <img src="\${hero.coverImage}" alt="\${hero.title}" class="w-full h-full object-cover" />
-                  <div class="absolute top-2 left-2 bg-black/90 px-2 py-0.5 border border-white/30 text-[10px] font-mono font-bold text-white uppercase">\${hero.format}</div>
-                </a>
-
-                <!-- Anime Information & Action Buttons -->
-                <div class="flex-1 space-y-3 sm:space-y-4 text-left">
-                  <div class="flex items-center gap-2 sm:gap-3 text-[10px] sm:text-xs font-mono flex-wrap">
-                    <span class="bg-red-600 text-white font-bold px-2.5 py-0.5 uppercase tracking-wider shadow">#\${idx + 1} TOP TRENDING</span>
-                    <span class="bg-white text-black font-bold px-2.5 py-0.5 uppercase">\${hero.format}</span>
-                    <span class="border border-white/30 bg-black/80 backdrop-blur-md px-2.5 py-0.5 text-white font-bold">\${hero.rating} &#9733;</span>
-                    <span class="border border-neutral-700 bg-black/80 px-2.5 py-0.5 text-neutral-300">\${hero.year || ''}</span>
-                  </div>
-
-                  <h1 class="font-bold text-2xl sm:text-4xl md:text-5xl text-white uppercase tracking-tight line-clamp-2 leading-tight drop-shadow-md">\${hero.title}</h1>
-                  
-                  <p class="text-xs sm:text-sm text-neutral-200 line-clamp-2 sm:line-clamp-3 font-sans leading-relaxed drop-shadow max-w-3xl">\${hero.synopsis}</p>
-                  
-                  <div class="pt-2 sm:pt-3 flex items-center gap-3 sm:gap-4">
-                    <a href="#/watch/\${hero.id}/1" class="inline-flex items-center gap-2 border border-white bg-white px-6 py-2.5 sm:px-8 sm:py-3 text-xs font-bold text-black uppercase tracking-wider hover:bg-neutral-200 shadow-lg">Stream Ep 1</a>
-                    <a href="#/anime/\${hero.id}" class="inline-block border border-white/30 bg-black/80 backdrop-blur-md px-5 py-2.5 sm:px-6 sm:py-3 text-xs font-mono text-white hover:border-white hover:bg-black uppercase">Details</a>
-                  </div>
-                </div>
-              </div>
-            </div>
-          \`).join('')}
-
-          <!-- Prev / Next Controls -->
-          <button onclick="changeHeroSlide(-1)" class="hidden sm:block absolute left-4 top-1/2 -translate-y-1/2 z-20 border border-white/30 bg-black/80 backdrop-blur-md text-white hover:bg-white hover:text-black p-3 font-mono text-sm transition-colors opacity-0 group-hover:opacity-100 shadow-xl">&larr;</button>
-          <button onclick="changeHeroSlide(1)" class="hidden sm:block absolute right-4 top-1/2 -translate-y-1/2 z-20 border border-white/30 bg-black/80 backdrop-blur-md text-white hover:bg-white hover:text-black p-3 font-mono text-sm transition-colors opacity-0 group-hover:opacity-100 shadow-xl">&rarr;</button>
-
-          <!-- Slide Indicators / Dots -->
-          <div class="absolute bottom-4 sm:bottom-6 right-4 sm:right-8 z-20 flex items-center gap-1.5 sm:gap-2 font-mono text-xs">
-            \${slides.map((_, idx) => \`
-              <button onclick="goToHeroSlide(\${idx})" id="heroDot-\${idx}" class="h-2 transition-all duration-300 \${idx === 0 ? 'w-6 sm:w-8 bg-white' : 'w-2 bg-neutral-600 hover:bg-neutral-400'}"></button>
-            \`).join('')}
-          </div>
-        </div>
-      \`;
-    }
-
-    function changeHeroSlide(dir) {
-      if (!state.heroSlides || state.heroSlides.length === 0) return;
-      const count = state.heroSlides.length;
-      let next = state.currentSlide + dir;
-      if (next < 0) next = count - 1;
-      if (next >= count) next = 0;
-      goToHeroSlide(next);
-    }
-
-    function goToHeroSlide(idx) {
-      if (!state.heroSlides || !state.heroSlides[idx]) return;
-      const prevIdx = state.currentSlide;
-      state.currentSlide = idx;
-
-      const prevPanel = document.getElementById('heroSlide-' + prevIdx);
-      const nextPanel = document.getElementById('heroSlide-' + idx);
-      const prevDot = document.getElementById('heroDot-' + prevIdx);
-      const nextDot = document.getElementById('heroDot-' + idx);
-
-      if (prevPanel) {
-        prevPanel.classList.remove('opacity-100', 'z-10');
-        prevPanel.classList.add('opacity-0', 'z-0', 'pointer-events-none');
-      }
-      if (nextPanel) {
-        nextPanel.classList.remove('opacity-0', 'z-0', 'pointer-events-none');
-        nextPanel.classList.add('opacity-100', 'z-10');
-      }
-
-      if (prevDot) {
-        prevDot.className = "h-2 w-2 bg-neutral-600 hover:bg-neutral-400 transition-all duration-300";
-      }
-      if (nextDot) {
-        nextDot.className = "h-2 w-6 sm:w-8 bg-white transition-all duration-300";
-      }
-    }
-
-    function startHeroSlideshowAutoPlay() {
-      if (state.slideInterval) clearInterval(state.slideInterval);
-      state.slideInterval = setInterval(() => {
-        changeHeroSlide(1);
-      }, 5000);
-    }
-
-    async function renderHome() {
-      const app = document.getElementById('app');
-      app.innerHTML = '<div class="text-center py-20 font-mono text-xs text-neutral-400">Loading catalog...</div>';
-      
-      try {
-        const [trending, popular] = await Promise.all([
-          fetch(API_BASE + '/api/anime/trending').then(r=>r.json()),
-          fetch(API_BASE + '/api/anime/popular').then(r=>r.json())
-        ]);
-
-        const heroSlides = (trending.data || []).slice(0, 10);
-        
-        let html = renderHeroSlideshow(heroSlides);
-
-        html += '<section id="continueWatchingSection" class="space-y-4 mb-10"></section>';
-
-        html += \`
-          <section class="space-y-6 mb-12">
-            <h2 class="font-bold text-lg sm:text-xl uppercase tracking-wider text-white border-l-2 border-white pl-3 sm:pl-4">Trending Now</h2>
-            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-6">
-              \${(trending.data || []).slice(0, 18).map(renderCardHTML).join('')}
-            </div>
-          </section>
-
-          <section class="space-y-6">
-            <h2 class="font-bold text-lg sm:text-xl uppercase tracking-wider text-white border-l-2 border-white pl-3 sm:pl-4">Popular All Time</h2>
-            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-6">
-              \${(popular.data || []).slice(0, 18).map(renderCardHTML).join('')}
-            </div>
-          </section>
-        \`;
-        app.innerHTML = html;
-        renderContinueWatchingDOM();
-        startHeroSlideshowAutoPlay();
+        resolve(JSON.parse(body));
       } catch (e) {
-        app.innerHTML = '<div class="text-center py-20 font-mono text-xs text-neutral-400">Failed to load catalog.</div>';
+        resolve({});
       }
-    }
-
-    async function renderSearch() {
-      const app = document.getElementById('app');
-      app.innerHTML = \`
-        <div class="space-y-8">
-          <div class="border-b border-border pb-4 flex justify-between items-center">
-            <h1 class="text-xl sm:text-2xl font-bold uppercase tracking-wider">Catalog & Filters</h1>
-          </div>
-          <div class="space-y-4 border border-border bg-surface p-4 sm:p-6 font-mono text-xs">
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div>
-                <label class="block mb-1 text-neutral-400 uppercase text-[10px]">Type (Shows / Movies)</label>
-                <select id="formatFilter" onchange="state.format=this.value; state.page=1; state.visibleCount=24; state.searchResults=[]; fetchSearchResults();" class="w-full border border-border bg-black p-2.5 text-white">
-                  <option value="All">All Types (Shows & Movies)</option>
-                  <option value="TV">Anime Shows (TV)</option>
-                  <option value="MOVIE">Anime Movies</option>
-                  <option value="OVA">OVA & Specials</option>
-                </select>
-              </div>
-              <div>
-                <label class="block mb-1 text-neutral-400 uppercase text-[10px]">Genre</label>
-                <select id="genreFilter" onchange="state.genre=this.value; state.page=1; state.visibleCount=24; state.searchResults=[]; fetchSearchResults();" class="w-full border border-border bg-black p-2.5 text-white">
-                  <option value="All">All Genres</option>
-                  <option value="Action">Action</option>
-                  <option value="Adventure">Adventure</option>
-                  <option value="Comedy">Comedy</option>
-                  <option value="Drama">Drama</option>
-                  <option value="Ecchi">Ecchi</option>
-                  <option value="Fantasy">Fantasy</option>
-                  <option value="Horror">Horror</option>
-                  <option value="Mahou Shoujo">Mahou Shoujo</option>
-                  <option value="Mecha">Mecha</option>
-                  <option value="Music">Music</option>
-                  <option value="Mystery">Mystery</option>
-                  <option value="Psychological">Psychological</option>
-                  <option value="Romance">Romance</option>
-                  <option value="Sci-Fi">Sci-Fi</option>
-                  <option value="Slice of Life">Slice of Life</option>
-                  <option value="Sports">Sports</option>
-                  <option value="Supernatural">Supernatural</option>
-                  <option value="Thriller">Thriller</option>
-                </select>
-              </div>
-              <div>
-                <label class="block mb-1 text-neutral-400 uppercase text-[10px]">Status</label>
-                <select id="statusFilter" onchange="state.status=this.value; state.page=1; state.visibleCount=24; state.searchResults=[]; fetchSearchResults();" class="w-full border border-border bg-black p-2.5 text-white">
-                  <option value="All">All Statuses</option>
-                  <option value="RELEASING">Airing</option>
-                  <option value="FINISHED">Finished</option>
-                </select>
-              </div>
-              <div>
-                <label class="block mb-1 text-neutral-400 uppercase text-[10px]">Release Decade / Era</label>
-                <select id="yearFilter" onchange="state.year=this.value; state.page=1; state.visibleCount=24; state.searchResults=[]; fetchSearchResults();" class="w-full border border-border bg-black p-2.5 text-white font-mono">
-                  <option value="All">All Release Years</option>
-                  <option value="2020s">2020s (2020 &ndash; 2026)</option>
-                  <option value="2010s">2010s (2010 &ndash; 2019)</option>
-                  <option value="2000s">2000s (2000 &ndash; 2009)</option>
-                  <option value="1990s">1990s (1990 &ndash; 1999)</option>
-                  <option value="1980s">1980s (1980 &ndash; 1989)</option>
-                  <option value="1970s">1970s (1970 &ndash; 1979)</option>
-                  <option value="1960s">1960s & Older (Before 1970)</option>
-                </select>
-              </div>
-            </div>
-            <div class="pt-2">
-              <label class="block mb-1 text-neutral-400 uppercase text-[10px]">Sort By</label>
-              <select id="sortFilter" onchange="state.sortBy=this.value; applyClientSorting();" class="w-full border border-white bg-surface p-2.5 text-white font-bold">
-                <option value="popularity">Popularity (Default)</option>
-                <option value="rating_desc">Rating: High to Low</option>
-                <option value="rating_asc">Rating: Low to High</option>
-                <option value="episodes_desc">Episodes: High to Low</option>
-                <option value="episodes_asc">Episodes: Low to High</option>
-              </select>
-            </div>
-          </div>
-          <div class="flex gap-2">
-            <input type="text" id="searchInput" value="\${state.query}" placeholder="Search anime title..." class="w-full border border-border bg-surface px-4 py-3 text-xs text-white font-mono focus:border-white focus:outline-none" />
-            <button onclick="state.query = document.getElementById('searchInput').value; state.page=1; state.visibleCount=24; state.searchResults=[]; fetchSearchResults();" class="border border-white bg-white text-black font-bold px-6 sm:px-8 text-xs font-mono uppercase">Search</button>
-          </div>
-
-          <div id="safetyWarningBox" class="hidden border border-red-600 bg-red-950/60 p-6 flex items-start gap-4 text-red-200 font-mono text-xs">
-            <div class="text-xl font-bold text-red-500">&#9888;</div>
-            <div class="space-y-1">
-              <div class="font-bold text-red-400 uppercase tracking-wider text-sm">Safety & Policy Violation Warning</div>
-              <p id="safetyWarningText"></p>
-            </div>
-          </div>
-          
-          <div id="searchResultsSection" class="space-y-8">
-            <div id="searchResults" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 sm:gap-6 pt-4"></div>
-            <div id="showMoreContainer" class="flex justify-center pt-4 pb-8 border-t border-neutral-900 hidden">
-              <button id="showMoreBtn" onclick="loadMoreCatalog()" class="border border-white bg-white text-black font-bold px-10 py-3 text-xs font-mono uppercase hover:bg-neutral-200">+ Show More Anime</button>
-            </div>
-          </div>
-        </div>
-      \`;
-      fetchSearchResults();
-    }
-
-    async function fetchSearchResults(append = false) {
-      const resDiv = document.getElementById('searchResults');
-      const showMoreContainer = document.getElementById('showMoreContainer');
-      const warningBox = document.getElementById('safetyWarningBox');
-      const warningText = document.getElementById('safetyWarningText');
-      if (!resDiv) return;
-
-      if (isForbidden(state.query)) {
-        if (warningBox && warningText) {
-          warningText.innerText = "WARNING: Content violating safety policies (including loli/shota/underage content) is strictly prohibited and not tolerated on this platform.";
-          warningBox.classList.remove('hidden');
-        }
-        resDiv.innerHTML = '';
-        if (showMoreContainer) showMoreContainer.classList.add('hidden');
-        return;
-      }
-
-      if (warningBox) warningBox.classList.add('hidden');
-
-      if (!append && state.page === 1) {
-        resDiv.innerHTML = '<div class="col-span-full text-center py-12 font-mono text-xs text-neutral-400">Searching catalog...</div>';
-      }
-
-      try {
-        const params = new URLSearchParams();
-        if (state.query) params.set('q', state.query);
-        if (state.genre !== 'All') params.set('genre', state.genre);
-        if (state.status !== 'All') params.set('status', state.status);
-        if (state.year !== 'All') params.set('year', state.year);
-        if (state.format !== 'All') params.set('format', state.format);
-        params.set('page', state.page);
-
-        const res = await fetch(API_BASE + '/api/anime/search?' + params.toString()).then(r=>r.json());
-        if (res.forbidden) {
-          if (warningBox && warningText) {
-            warningText.innerText = res.error;
-            warningBox.classList.remove('hidden');
-          }
-          resDiv.innerHTML = '';
-          if (showMoreContainer) showMoreContainer.classList.add('hidden');
-          return;
-        }
-
-        if (res.data && res.data.length > 0) {
-          const newItems = res.data;
-          if (!append && state.page === 1) state.searchResults = newItems;
-          else {
-            const seen = new Set(state.searchResults.map(i => i.id));
-            for (const item of newItems) {
-              if (!seen.has(item.id)) {
-                state.searchResults.push(item);
-                seen.add(item.id);
-              }
-            }
-          }
-
-          if (state.searchResults.length < state.visibleCount && state.page < 5) {
-            state.page += 1;
-            fetchSearchResults(true);
-            return;
-          }
-
-          applyClientSorting();
-        } else {
-          if (!append && state.page === 1) {
-            resDiv.innerHTML = '<div class="col-span-full text-center py-12 font-mono text-xs text-neutral-500 uppercase">No anime found</div>';
-            if (showMoreContainer) showMoreContainer.classList.add('hidden');
-          } else {
-            applyClientSorting();
-          }
-        }
-      } catch (e) {
-        if (!append && state.page === 1) resDiv.innerHTML = '<div class="col-span-full text-center py-12 font-mono text-xs text-neutral-500">Error loading search results</div>';
-      }
-    }
-
-    function applyClientSorting() {
-      const resDiv = document.getElementById('searchResults');
-      const showMoreContainer = document.getElementById('showMoreContainer');
-      if (!resDiv || !state.searchResults) return;
-
-      const sorted = sortAnimeList(state.searchResults, state.sortBy);
-      
-      const fullRowsAvailable = Math.floor(sorted.length / 6) * 6;
-      
-      let targetCount = Math.min(state.visibleCount, fullRowsAvailable);
-      if (targetCount === 0 && sorted.length > 0) {
-        targetCount = sorted.length;
-      }
-
-      const visibleList = sorted.slice(0, targetCount);
-      resDiv.innerHTML = visibleList.map(renderCardHTML).join('');
-
-      if (showMoreContainer) {
-        showMoreContainer.classList.remove('hidden');
-      }
-    }
-
-    function loadMoreCatalog() {
-      state.visibleCount += 18;
-      state.page += 1;
-      fetchSearchResults(true);
-    }
-
-    function renderMyList() {
-      const app = document.getElementById('app');
-      const list = getMyList();
-
-      let html = \`
-        <div class="space-y-8">
-          <div class="border-b border-border pb-4 flex justify-between items-center">
-            <h1 class="text-xl sm:text-2xl font-bold uppercase tracking-wider">My List & Ratings</h1>
-            <div class="text-xs font-mono text-neutral-400">\${list.length} Items Saved</div>
-          </div>
-      \`;
-
-      if (list.length > 0) {
-        html += \`
-          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-            \${list.map(item => \`
-              <div class="border border-border bg-surface p-4 flex gap-4">
-                <img src="\${item.coverImage}" class="w-20 sm:w-24 aspect-[2/3] object-cover border border-neutral-800" />
-                <div class="flex-1 flex flex-col justify-between space-y-2">
-                  <div>
-                    <a href="#/anime/\${item.animeId}" class="font-bold text-sm text-white hover:underline block truncate">\${item.animeTitle}</a>
-                    <span class="text-xs font-mono text-neutral-400">\${item.status || 'Watching'}</span>
-                  </div>
-                  <div>
-                    <span class="text-[10px] font-mono text-neutral-500 uppercase block">Rating (\${item.userRating}/5 Stars)</span>
-                    <div class="flex gap-1">
-                      \${[1,2,3,4,5].map(star => \`
-                        <button onclick="updateRating(\${item.animeId}, \${star})" class="text-sm \${star <= item.userRating ? 'text-white' : 'text-neutral-700'}">&#9733;</button>
-                      \`).join('')}
-                    </div>
-                  </div>
-                  <div class="flex justify-between items-center pt-2 border-t border-neutral-900 text-xs font-mono">
-                    <a href="#/watch/\${item.animeId}/1" class="text-white font-bold hover:underline uppercase">Stream</a>
-                    <button onclick="event.preventDefault(); event.stopPropagation(); removeFromMyList(\${item.animeId}); renderMyList();" class="text-neutral-400 hover:text-white uppercase font-mono border border-neutral-800 bg-black px-2 py-1 text-[10px]">Remove</button>
-                  </div>
-                </div>
-              </div>
-            \`).join('')}
-          </div>
-        \`;
-      } else {
-        html += '<div class="border border-border bg-surface p-16 text-center text-xs font-mono text-neutral-500 uppercase">No anime saved in My List.</div>';
-      }
-
-      html += '</div>';
-      app.innerHTML = html;
-    }
-
-    function updateRating(animeId, stars) {
-      const list = getMyList();
-      const item = list.find(i => i.animeId === animeId);
-      if (item) {
-        item.userRating = stars;
-        saveToMyList(item);
-        renderMyList();
-      }
-    }
-
-    function renderEpisodesGridHTML(animeId, releasedCount, activeEp = 0) {
-      const chunkSize = 100;
-      const numChunks = Math.ceil(releasedCount / chunkSize) || 1;
-      const currentChunk = state.epRangeChunk || 0;
-
-      const startEp = currentChunk * chunkSize + 1;
-      const endEp = Math.min((currentChunk + 1) * chunkSize, releasedCount);
-
-      let html = '<div class="space-y-4">';
-      html += \`
-        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-3">
-          <h3 class="font-bold text-sm uppercase tracking-wider text-white border-l-2 border-white pl-3">
-            Released Episodes (\${releasedCount})
-          </h3>
-          <div class="flex flex-wrap items-center gap-3 font-mono text-[11px]">
-            <span class="flex items-center gap-1 text-emerald-400"><span class="h-2.5 w-2.5 bg-emerald-500 rounded-full inline-block"></span> Watched</span>
-            <span class="flex items-center gap-1 text-neutral-300"><span class="h-2.5 w-2.5 bg-neutral-600 rounded-full inline-block"></span> Manga Canon</span>
-            <span class="flex items-center gap-1 text-blue-400"><span class="h-2.5 w-2.5 bg-blue-500 rounded-full inline-block"></span> Mixed Canon/Filler</span>
-            <span class="flex items-center gap-1 text-red-400"><span class="h-2.5 w-2.5 bg-red-600 rounded-full inline-block"></span> Filler</span>
-          </div>
-        </div>
-      \`;
-
-      if (numChunks > 1) {
-        html += '<div class="flex items-center gap-2 overflow-x-auto scrollbar-none pb-2 font-mono text-xs">';
-        if (currentChunk > 0) {
-          html += \`<button onclick="state.epRangeChunk=\${currentChunk-1}; refreshEpisodeView(\${animeId}, \${releasedCount}, \${activeEp})" class="border border-border bg-surface px-3 py-1.5 text-neutral-300 hover:border-white">&larr; Prev 100</button>\`;
-        }
-        for (let i = 0; i < numChunks; i++) {
-          const rStart = i * chunkSize + 1;
-          const rEnd = Math.min((i + 1) * chunkSize, releasedCount);
-          const isSelected = i === currentChunk;
-          html += \`<button onclick="state.epRangeChunk=\${i}; refreshEpisodeView(\${animeId}, \${releasedCount}, \${activeEp})" class="px-3 py-1.5 border \${isSelected ? 'border-white bg-white text-black font-bold' : 'border-border bg-black text-neutral-400 hover:text-white'}">\${rStart} - \${rEnd}</button>\`;
-        }
-        if (currentChunk < numChunks - 1) {
-          html += \`<button onclick="state.epRangeChunk=\${currentChunk+1}; refreshEpisodeView(\${animeId}, \${releasedCount}, \${activeEp})" class="border border-border bg-surface px-3 py-1.5 text-neutral-300 hover:border-white">Next 100 &rarr;</button>\`;
-        }
-        html += '</div>';
-      }
-
-      html += '<div id="episodeGridContainer" class="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-2.5 sm:gap-3 max-h-[420px] overflow-y-auto pr-1">';
-      for (let i = startEp; i <= endEp; i++) {
-        const isActive = activeEp === i;
-        const isWatched = isEpisodeWatched(animeId, i);
-        const cat = determineCategory(animeId, i);
-
-        let colorStyle = "border-border bg-surface text-neutral-300 hover:border-neutral-400";
-        if (isActive) {
-          colorStyle = "border-white bg-white text-black font-bold scale-105";
-        } else if (isWatched) {
-          colorStyle = "border-emerald-500 bg-emerald-950/40 text-emerald-300 font-bold";
-        } else if (cat === "filler") {
-          colorStyle = "border-red-600 bg-red-950/40 text-red-300 font-medium";
-        } else if (cat === "mixed" || cat === "anime_canon") {
-          colorStyle = "border-blue-500 bg-blue-950/40 text-blue-300 font-medium";
-        }
-
-        html += \`
-          <a href="#/watch/\${animeId}/\${i}" class="border \${colorStyle} p-2.5 text-center font-mono text-xs flex flex-col items-center justify-center">EP \${i}</a>
-        \`;
-      }
-      html += '</div></div>';
-      return html;
-    }
-
-    function refreshEpisodeView(animeId, releasedCount, activeEp) {
-      const container = document.getElementById('episodeGridSection');
-      if (container) {
-        container.innerHTML = renderEpisodesGridHTML(animeId, releasedCount, activeEp);
-      }
-    }
-
-    function toggleMyListButton(anime) {
-      const btn = document.getElementById('myListActionBtn');
-      if (!btn) return;
-
-      if (isAnimeInMyList(anime.id)) {
-        removeFromMyList(anime.id);
-        btn.innerText = 'Save to My List';
-        btn.className = 'border border-border bg-surface px-6 py-3 text-xs font-bold text-white uppercase hover:border-white';
-      } else {
-        saveToMyList({
-          animeId: anime.id,
-          animeTitle: anime.title,
-          coverImage: anime.coverImage,
-          format: anime.format,
-          userRating: 5,
-          status: 'Watching'
-        });
-        btn.innerText = 'Remove from My List';
-        btn.className = 'border border-neutral-700 bg-black text-neutral-300 px-6 py-3 text-xs font-bold uppercase hover:border-white hover:text-white';
-      }
-    }
-
-    async function renderDetail(id) {
-      const app = document.getElementById('app');
-      app.innerHTML = '<div class="text-center py-20 font-mono text-xs text-neutral-400">Loading details...</div>';
-      try {
-        const res = await fetch(API_BASE + '/api/anime/' + id).then(r=>r.json());
-        const anime = res.data;
-        if (!anime) {
-          app.innerHTML = '<div class="text-center py-20 font-mono text-xs text-neutral-400">Anime not found or prohibited.</div>';
-          return;
-        }
-
-        const releasedCount = anime.releasedEpisodes || anime.episodes || 12;
-        const saved = isAnimeInMyList(anime.id);
-
-        let html = \`
-          <div class="space-y-10">
-            <div class="relative border-b border-border bg-neutral-950 p-6 sm:p-8 md:p-12 flex flex-col md:flex-row gap-6 sm:gap-8">
-              <div class="w-44 sm:w-52 aspect-[2/3] border-2 border-border overflow-hidden bg-neutral-900 flex-shrink-0">
-                <img src="\${anime.coverImage}" class="w-full h-full object-cover" />
-              </div>
-              <div class="space-y-4">
-                <div class="flex gap-3 text-xs font-mono flex-wrap">
-                  <span class="bg-white text-black font-bold px-2.5 py-0.5 uppercase">\${anime.format}</span>
-                  <span class="border border-neutral-700 bg-surface px-2.5 py-0.5 text-white">\${anime.rating}</span>
-                  <span class="border border-neutral-800 bg-surface px-2.5 py-0.5 text-neutral-400">\${releasedCount} EPS RELEASED</span>
-                </div>
-                <h1 class="text-2xl sm:text-3xl md:text-5xl font-bold uppercase text-white">\${anime.title}</h1>
-                <p class="text-xs text-neutral-300 font-sans max-w-3xl leading-relaxed">\${anime.synopsis}</p>
-                <div class="pt-3 flex gap-4">
-                  <a href="#/watch/\${anime.id}/1" class="inline-block border border-white bg-white px-8 py-3 text-xs font-bold text-black uppercase">Stream Ep 1</a>
-                  <button id="myListActionBtn" onclick="toggleMyListButton(\${JSON.stringify({id: anime.id, title: anime.title.replace(/'/g, "\\'"), coverImage: anime.coverImage, format: anime.format})})" class="\${saved ? 'border border-neutral-700 bg-black text-neutral-300' : 'border border-border bg-surface text-white'} px-6 py-3 text-xs font-bold uppercase hover:border-white">
-                    \${saved ? 'Remove from My List' : 'Save to My List'}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <!-- Season Selector -->
-            \${anime.seasons && anime.seasons.length > 0 ? \`
-              <div class="space-y-4 border-t border-border pt-6">
-                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <h3 class="font-bold text-sm uppercase tracking-wider text-white border-l-2 border-white pl-3">Seasons & Related Series (\${anime.seasons.length})</h3>
-                  <div class="flex items-center gap-2 font-mono text-xs">
-                    <span class="text-neutral-400 uppercase text-[11px]">Select Season:</span>
-                    <select onchange="if(this.value) navigateTo('/anime/' + this.value)" class="border border-border bg-surface px-3 py-1.5 text-xs text-white focus:border-white focus:outline-none font-mono">
-                      <option value="" disabled selected>Select Released Season...</option>
-                      \${anime.seasons.map(s => \`<option value="\${s.id}">[\${s.relationType}] \${s.title} (\${s.format || 'TV'})\` + '</option>').join('')}
-                    </select>
-                  </div>
-                </div>
-
-                <div class="flex flex-wrap gap-2.5">
-                  \${anime.seasons.map(s => \`
-                    <a href="#/anime/\${s.id}" class="border \${s.id == anime.id ? 'border-white bg-white text-black font-bold' : 'border-border bg-surface text-neutral-300 hover:border-white hover:text-white'} px-3.5 py-2 font-mono text-xs">
-                      <span class="font-bold uppercase text-[10px] text-neutral-400 mr-1.5">\${s.relationType}:</span>\${s.title}
-                    </a>
-                  \`).join('')}
-                </div>
-              </div>
-            \` : ''}
-
-            <!-- Episodes Chunked Grid -->
-            <div id="episodeGridSection">
-              \${renderEpisodesGridHTML(anime.id, releasedCount, 0)}
-            </div>
-
-            <!-- Voice Cast & Characters -->
-            \${anime.characters && anime.characters.length > 0 ? \`
-              <div class="space-y-4">
-                <h3 class="font-bold text-sm uppercase tracking-wider text-white border-l-2 border-white pl-3">Voice Cast & Characters</h3>
-                <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                  \${anime.characters.slice(0, 9).map(c => \`
-                    <div class="flex items-center justify-between border border-border bg-surface p-3 text-xs">
-                      <div class="flex items-center gap-3 truncate">
-                        <img src="\${c.image || ''}" class="w-12 h-12 object-cover border border-neutral-800" />
-                        <div class="truncate">
-                          <div class="font-semibold text-white truncate">\${c.name}</div>
-                          <div class="font-mono text-[10px] text-neutral-500 uppercase">\${c.role}</div>
-                        </div>
-                      </div>
-                      <div class="text-right truncate pl-2">
-                        <div class="text-neutral-300 truncate">\${c.voiceActor ? c.voiceActor.name : 'Unassigned'}</div>
-                        <div class="font-mono text-[10px] text-neutral-500">Japanese</div>
-                      </div>
-                    </div>
-                  \`).join('')}
-                </div>
-              </div>
-            \` : ''}
-
-            <!-- Comments Section -->
-            \${renderCommentsHTML(anime.id)}
-          </div>
-        \`;
-        app.innerHTML = html;
-      } catch (e) {
-        app.innerHTML = '<div class="text-center py-20 font-mono text-xs text-neutral-400">Error loading details</div>';
-      }
-    }
-
-    async function renderWatch(id, ep) {
-      const app = document.getElementById('app');
-      app.innerHTML = '<div class="text-center py-20 font-mono text-xs text-neutral-400">Loading stream...</div>';
-      try {
-        const res = await fetch(API_BASE + '/api/anime/' + id).then(r=>r.json());
-        const anime = res.data;
-        if (!anime) {
-          app.innerHTML = '<div class="text-center py-20 font-mono text-xs text-neutral-400">Anime not found or prohibited.</div>';
-          return;
-        }
-
-        const releasedCount = anime.releasedEpisodes || anime.episodes || 12;
-        
-        try {
-          const history = JSON.parse(localStorage.getItem('anistream_watch_history') || '[]');
-          const filtered = history.filter(h => !(h.animeId === anime.id && h.episode === ep));
-          filtered.unshift({ animeId: anime.id, episode: ep, timestamp: Date.now() });
-          localStorage.setItem('anistream_watch_history', JSON.stringify(filtered));
-        } catch(e){}
-
-        saveContinueWatching({
-          animeId: anime.id,
-          animeTitle: anime.title,
-          coverImage: anime.coverImage,
-          episode: ep,
-          totalEpisodes: releasedCount
-        });
-
-        const provider = EMBED_PROVIDERS.find(p => p.id === state.server) || EMBED_PROVIDERS[0];
-        const streamUrl = provider.getUrl(anime.id, ep, state.audio);
-
-        let html = \`
-          <div class="space-y-6">
-            <div class="flex items-center justify-between border-b border-border pb-4 text-xs font-mono flex-wrap gap-2">
-              <div>
-                <a href="#/anime/\${anime.id}" class="text-neutral-400 hover:text-white">&larr; Back to Details</a>
-                <h1 class="font-bold text-base sm:text-lg text-white uppercase mt-1">\${anime.title} &mdash; EP \${ep}</h1>
-              </div>
-              <div class="flex gap-2">
-                \${ep > 1 ? \`<a href="#/watch/\${anime.id}/\${ep-1}" class="border border-border bg-surface px-4 py-2 text-white hover:border-white">PREV</a>\` : ''}
-                \${ep < releasedCount ? \`<a href="#/watch/\${anime.id}/\${ep+1}" class="border border-white bg-white text-black font-bold px-4 py-2">NEXT</a>\` : ''}
-              </div>
-            </div>
-
-            <div class="relative aspect-video w-full bg-black border border-border overflow-hidden">
-              <iframe id="streamIframe" src="\${streamUrl}" class="w-full h-full border-0" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen onerror="handleServerFailover()"></iframe>
-            </div>
-
-            <div class="flex flex-col sm:flex-row items-center justify-between gap-4 border border-border bg-surface p-4 text-xs font-mono">
-              <div class="flex items-center gap-2">
-                <span class="text-neutral-400 uppercase">Server:</span>
-                \${EMBED_PROVIDERS.map(p => \`
-                  <button onclick="switchServer('\${p.id}')" class="h-8 w-8 border \${state.server === p.id ? 'border-white bg-white text-black font-bold' : 'border-border bg-black text-neutral-400 hover:border-neutral-500 hover:text-white'}">\${p.id}</button>
-                \`).join('')}
-              </div>
-              <div class="flex items-center gap-2">
-                <span class="text-neutral-400 uppercase">Audio:</span>
-                <button onclick="switchAudio('sub')" class="px-3 py-1.5 border \${state.audio === 'sub' ? 'bg-white text-black font-bold' : 'border-border bg-black text-neutral-400'}">SUB</button>
-                <button onclick="switchAudio('dub')" class="px-3 py-1.5 border \${state.audio === 'dub' ? 'bg-white text-black font-bold' : 'border-border bg-black text-neutral-400'}">DUB</button>
-              </div>
-            </div>
-
-            \${anime.seasons && anime.seasons.length > 0 ? \`
-              <div class="space-y-4 border-t border-border pt-6">
-                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <h3 class="font-bold text-sm uppercase tracking-wider text-white border-l-2 border-white pl-3">Seasons & Related Series (\${anime.seasons.length})</h3>
-                  <div class="flex items-center gap-2 font-mono text-xs">
-                    <span class="text-neutral-400 uppercase text-[11px]">Select Season:</span>
-                    <select onchange="if(this.value) navigateTo('/anime/' + this.value)" class="border border-border bg-surface px-3 py-1.5 text-xs text-white focus:border-white focus:outline-none font-mono">
-                      <option value="" disabled selected>Select Released Season...</option>
-                      \${anime.seasons.map(s => \`<option value="\${s.id}">[\${s.relationType}] \${s.title} (\${s.format || 'TV'})\` + '</option>').join('')}
-                    </select>
-                  </div>
-                </div>
-
-                <div class="flex flex-wrap gap-2.5">
-                  \${anime.seasons.map(s => \`
-                    <a href="#/anime/\${s.id}" class="border \${s.id == anime.id ? 'border-white bg-white text-black font-bold' : 'border-border bg-surface text-neutral-300 hover:border-white hover:text-white'} px-3.5 py-2 font-mono text-xs">
-                      <span class="font-bold uppercase text-[10px] text-neutral-400 mr-1.5">\${s.relationType}:</span>\${s.title}
-                    </a>
-                  \`).join('')}
-                </div>
-              </div>
-            \` : ''}
-
-            <div id="episodeGridSection">
-              \${renderEpisodesGridHTML(anime.id, releasedCount, ep)}
-            </div>
-
-            \${renderCommentsHTML(anime.id, ep)}
-          </div>
-        \`;
-        app.innerHTML = html;
-      } catch (e) {
-        app.innerHTML = '<div class="text-center py-20 font-mono text-xs text-neutral-400">Error loading stream</div>';
-      }
-    }
-
-    function renderCommentsHTML(animeId, episode) {
-      const list = getComments(animeId);
-      return \`
-        <div class="space-y-6 border-t border-border pt-8">
-          <h3 class="font-bold text-sm uppercase tracking-wider text-white border-l-2 border-white pl-3">Comments (\${list.length})</h3>
-          
-          <div class="border border-border bg-surface p-5 space-y-3">
-            <input type="text" id="commentUser" placeholder="Username (optional)" class="w-full border border-border bg-black p-2.5 text-xs text-white font-mono focus:outline-none" />
-            <textarea id="commentText" rows="3" placeholder="Leave a comment after watching..." class="w-full border border-border bg-black p-3 text-xs text-white font-sans focus:outline-none"></textarea>
-            <div class="flex justify-end">
-              <button onclick="submitComment(\${animeId}, \${episode || 0})" class="border border-white bg-white text-black font-bold px-6 py-2 text-xs font-mono uppercase">Post Comment</button>
-            </div>
-          </div>
-
-          <div class="space-y-3">
-            \${list.length > 0 ? list.map(c => \`
-              <div class="border border-border bg-surface p-4 space-y-2 text-xs font-sans">
-                <div class="flex justify-between font-mono text-neutral-400">
-                  <span class="text-white font-bold">\${c.username} \${c.episode ? '(EP ' + c.episode + ')' : ''}</span>
-                  <span class="text-[10px]">\${new Date(c.timestamp).toLocaleDateString()}</span>
-                </div>
-                <p class="text-neutral-300 pl-4 border-l border-neutral-800">\${c.text}</p>
-              </div>
-            \`).join('') : '<div class="border border-border bg-surface p-6 text-center text-xs font-mono text-neutral-500">No comments yet.</div>'}
-          </div>
-        </div>
-      \`;
-    }
-
-    function submitComment(animeId, ep) {
-      const user = document.getElementById('commentUser').value;
-      const text = document.getElementById('commentText').value;
-      if (!text.trim()) return;
-      addComment(animeId, user, text, ep || null);
-      if (state.route.startsWith('/watch/')) renderWatch(state.animeId, state.episode);
-      else renderDetail(state.animeId);
-    }
-
-    function switchServer(srvId) {
-      state.server = srvId;
-      renderWatch(state.animeId, state.episode);
-    }
-
-    function switchAudio(aud) {
-      state.audio = aud;
-      renderWatch(state.animeId, state.episode);
-    }
-
-    function handleServerFailover() {
-      const idx = EMBED_PROVIDERS.findIndex(p => p.id === state.server);
-      if (idx >= 0 && idx < EMBED_PROVIDERS.length - 1) {
-        state.server = EMBED_PROVIDERS[idx + 1].id;
-        renderWatch(state.animeId, state.episode);
-      }
-    }
-  </script>
-</body>
-</html>`;
+    });
+  });
 }
 
 const server = http.createServer(async (req, res) => {
@@ -1495,7 +516,7 @@ const server = http.createServer(async (req, res) => {
   const pathname = parsedUrl.pathname;
 
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Accept-Encoding");
 
   if (req.method === "OPTIONS") {
@@ -1505,6 +526,12 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
+    if (pathname === "/api/keepalive" || pathname === "/api/ping") {
+      const payload = JSON.stringify({ success: true, status: "alive", timestamp: Date.now() });
+      sendCompressedResponse(req, res, 200, { "Content-Type": "application/json" }, payload);
+      return;
+    }
+
     if (pathname === "/api/anime/trending") {
       const list = await getTrending();
       const payload = JSON.stringify({ success: true, data: list });
@@ -1542,6 +569,42 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (pathname.includes("/vote")) {
+      const parts = pathname.split("/").filter(Boolean);
+      const commentId = parts[2];
+      const body = await parseRequestBody(req);
+      const success = await voteComment(commentId, body.type);
+      const payload = JSON.stringify({ success });
+      sendCompressedResponse(req, res, 200, { "Content-Type": "application/json" }, payload);
+      return;
+    }
+
+    if (pathname.includes("/comments")) {
+      const parts = pathname.split("/").filter(Boolean);
+      const animeId = parts[2];
+
+      if (req.method === "GET") {
+        const ep = parsedUrl.query.episode;
+        const comments = await getCommentsForAnime(animeId, ep);
+        const payload = JSON.stringify({ success: true, data: comments });
+        sendCompressedResponse(req, res, 200, { "Content-Type": "application/json" }, payload);
+        return;
+      }
+
+      if (req.method === "POST") {
+        const body = await parseRequestBody(req);
+        const saved = await saveCommentForAnime(animeId, body);
+        if (!saved) {
+          const payload = JSON.stringify({ success: false, error: "Comment text cannot be empty" });
+          sendCompressedResponse(req, res, 400, { "Content-Type": "application/json" }, payload);
+          return;
+        }
+        const payload = JSON.stringify({ success: true, data: saved });
+        sendCompressedResponse(req, res, 200, { "Content-Type": "application/json" }, payload);
+        return;
+      }
+    }
+
     if (pathname.startsWith("/api/anime/")) {
       const parts = pathname.split("/").filter(Boolean);
       const animeId = parts[2];
@@ -1556,8 +619,8 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const htmlContent = renderAppHTML();
-    sendCompressedResponse(req, res, 200, { "Content-Type": "text/html" }, htmlContent);
+    const payload = JSON.stringify({ success: true, status: "ANISTREAM API Active" });
+    sendCompressedResponse(req, res, 200, { "Content-Type": "application/json" }, payload);
   } catch (error) {
     console.error("Server error:", error);
     const payload = JSON.stringify({ success: false, error: "Internal Server Error" });
@@ -1567,7 +630,6 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`================================================`);
-  console.log(`  ANISTREAM DEPLOYMENT READY SERVER LIVE!`);
-  console.log(`  Access URL: http://localhost:${PORT}`);
+  console.log(`  ANISTREAM ADVANCED COMMENTS BACKEND LIVE ON PORT ${PORT}!`);
   console.log(`================================================`);
 });
