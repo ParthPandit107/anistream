@@ -144,10 +144,10 @@
     }
 
     const EMBED_PROVIDERS = [
-      { id: '1', getUrl: (id, ep, aud) => `https://megaplay.buzz/stream/ani/${id}/${ep}/${aud}` },
-      { id: '2', getUrl: (id, ep, aud) => `https://vidnest.fun/animepahe/${id}/${ep}/${aud}` },
-      { id: '3', getUrl: (id, ep, aud) => `https://vidnest.fun/anime/${id}/${ep}/${aud}` },
-      { id: '4', getUrl: (id, ep, aud) => `https://tryembed.us.cc/embed/anime/${id}/${ep}/${aud}` }
+      { id: '1', getUrl: (id, ep, aud) => `https://tryembed.us.cc/embed/anime/${id}/${ep}/${aud}` },
+      { id: '2', getUrl: (id, ep, aud) => `https://megaplay.buzz/stream/ani/${id}/${ep}/${aud}` },
+      { id: '3', getUrl: (id, ep, aud) => `https://vidnest.fun/animepahe/${id}/${ep}/${aud}` },
+      { id: '4', getUrl: (id, ep, aud) => `https://vidnest.fun/anime/${id}/${ep}/${aud}` }
     ];
 
     async function fetchWithRetry(url, maxRetries = 5, delayMs = 3000) {
