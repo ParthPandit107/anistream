@@ -85,6 +85,11 @@
     </div>
   </header>
 
+  <!-- Reusable SisterSitePromo Top Banner -->
+  <aside class="max-w-7xl mx-auto px-3 sm:px-6 pt-4 sm:pt-6 w-full">
+    <div id="sisterSitePromoContainer"></div>
+  </aside>
+
   <!-- Main View -->
   <main id="app" class="flex-1 max-w-7xl mx-auto w-full px-3 sm:px-6 py-6 sm:py-10 space-y-8 overflow-x-hidden"></main>
 
@@ -286,6 +291,40 @@
     window.addEventListener('hashchange', handleRoute);
     window.addEventListener('load', handleRoute);
 
+    function dismissSisterSitePromo() {
+      const container = document.getElementById('sisterSitePromoContainer');
+      if (container) {
+        container.style.display = 'none';
+        container.innerHTML = '';
+      }
+    }
+
+    function renderSisterSitePromoHTML() {
+      try {
+        localStorage.removeItem('anistream_dismiss_promo');
+        sessionStorage.removeItem('anistream_dismiss_promo');
+      } catch(e){}
+
+      const CINESTREAM_URL = 'https://cinestream.wstream.workers.dev';
+      return `
+        <div id="sisterPromoCard" class="relative border border-border bg-neutral-950 p-4 sm:p-5 flex flex-col sm:flex-row items-center justify-between gap-4 font-mono text-xs shadow-xl">
+          <button onclick="dismissSisterSitePromo()" title="Dismiss Recommendation" class="absolute top-2 right-2 z-30 text-white bg-neutral-900 border border-neutral-700 hover:bg-white hover:text-black w-8 h-8 flex items-center justify-center font-bold text-sm transition-colors cursor-pointer">
+            ✕
+          </button>
+          <div class="flex items-center gap-3 text-center sm:text-left pr-8">
+            <div class="h-10 w-10 bg-white text-black font-display font-black text-xl flex items-center justify-center flex-shrink-0">C</div>
+            <div>
+              <div class="font-bold text-white uppercase text-sm">Looking for Movies & TV Shows?</div>
+              <div class="text-neutral-400 text-[11px] mt-0.5">Explore our sister platform CineStream for top trending movies, Hollywood blockbusters & TV series.</div>
+            </div>
+          </div>
+          <a href="${CINESTREAM_URL}" target="_blank" rel="noopener" class="border border-white bg-white text-black font-bold px-6 py-2.5 uppercase tracking-wider hover:bg-neutral-200 transition-colors flex-shrink-0 min-touch-target flex items-center justify-center">
+            Visit CineStream &rarr;
+          </a>
+        </div>
+      `;
+    }
+
     function handleRoute() {
       if (state.slideInterval) {
         clearInterval(state.slideInterval);
@@ -295,7 +334,20 @@
         clearInterval(state.commentPollInterval);
         state.commentPollInterval = null;
       }
+
       const hash = window.location.hash.slice(1) || '/';
+      const isHomePage = (hash === '/' || hash === '');
+      const promoContainer = document.getElementById('sisterSitePromoContainer');
+      if (promoContainer) {
+        if (isHomePage) {
+          promoContainer.style.display = 'block';
+          promoContainer.innerHTML = renderSisterSitePromoHTML();
+        } else {
+          promoContainer.style.display = 'none';
+          promoContainer.innerHTML = '';
+        }
+      }
+
       if (hash === '/') renderHome();
       else if (hash.startsWith('/search')) {
         const params = new URLSearchParams(hash.split('?')[1] || '');
